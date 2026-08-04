@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: make lint
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [/bin/dash, /bin/bash]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y dash jq
+      - run: ./build.sh
+      - run: NP_TEST_SHELL=${{ matrix.shell }} sh test/run.sh all
+
+  # busybox ash is the most limited shell/awk/od combination we support, and
+  # the one most likely to be the CI image a consumer actually runs in.
+  test-busybox:
+    runs-on: ubuntu-latest
+    container: busybox:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh build.sh
+      - run: sh test/run.sh all
+
+  built-artifact-is-current:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./build.sh
+      - name: nptrace.sh must match src/
+        run: git diff --exit-code nptrace.sh

@@ -1,0 +1,93 @@
+# catalog-tracing-sh — working agreements
+
+The POSIX shell SDK (`nptrace.sh`) for the nullplatform tracing API.
+Producer-only; zero runtime dependencies beyond `curl` and the POSIX toolset.
+
+## Treat this repo as PUBLIC
+
+The repository may be private for now, but treat everything (code, comments,
+examples, README, `llms.txt`, commit messages) as public:
+
+- **No internal leaks.** Only the public `api.nullplatform.com` endpoints —
+  never internal/in-cluster hosts, private URLs, credentials/tokens, internal
+  service names, codenames, or internal platform architecture. All example data
+  must be obviously synthetic.
+- Public-quality docs and clear
+  [Conventional-Commits](https://www.conventionalcommits.org/) messages.
+
+## The wire contract lives in the tracing API (another repo)
+
+The tracing **API** owns the wire contract. It is **hand-ported here** into
+`src/identity.sh` (the id grammar) and `src/wire.sh` (types, statuses, facets,
+carrier). The SDK and the API ship separately and are kept in sync **by hand** —
+there is no codegen and no shared package.
+
+**When the API's wire contract changes** (envelope shape, the `tracing.*`
+facets, id/identity grammar, validation rules), sync this SDK:
+
+1. Port the change into `src/identity.sh` / `src/wire.sh`, keeping
+   `test/unit/identity.sh` and `test/unit/wire.sh` aligned.
+2. Reconcile the public surface only if producers must set something new.
+3. Run `make lint && make test-all` — the wire tests are the safety net; a
+   missed change shows up red here.
+4. Rebuild (`./build.sh`) and commit `nptrace.sh`. CI fails if the committed
+   artifact is stale.
+
+A wire-contract change is therefore a **four-repo** change: the API, the JS SDK
+(copy), the Go SDK (port), and this one (port).
+
+## Invariants — do not break
+
+- **Tracing NEVER breaks the caller.** If the API or auth endpoint is down,
+  slow, hanging, or erroring, the instrumented pipeline proceeds without error.
+  Every public function returns 0, always. The hot path is a local file write;
+  the network is touched only at flush, under a wall-clock budget. When adding
+  any surface, ask first: *what does this do when the API is unreachable?* The
+  answer must be "nothing the caller can observe."
+- **If state cannot be persisted, degrade to a real no-op.** A half-initialised
+  SDK whose next write fails takes down a caller running under `set -e` — the
+  exact failure mode tracing must never cause.
+- **POSIX `sh` only.** No arrays, `[[`, `local`, `$RANDOM`, `function`, `+=`, or
+  process substitution. `shellcheck -s sh` must pass clean. Remember there is no
+  `local`: a recursive helper clobbers its caller's variables, so prefer
+  iteration and per-function variable prefixes (`_sp_`, `_en_`, …).
+- **Zero runtime dependencies** beyond `curl`, `awk`, `od`, `sed`, `tr`, `cut`,
+  `date`, `mv`, `mkdir`. `jq` is a DEV dependency only — never at runtime.
+- **Speak the wire vocabulary** — never rename or invent concepts.
+- **One function per operation, with an OPTIONAL handle argument.** The ambient
+  form is an omitted argument with a default, never a second function. Do not
+  add a parallel `*_begin`/`*_end` family — the sibling SDKs deliberately
+  removed every redundant second spelling and so does this one.
+- **The bearer token never appears in argv OR in an xtrace.** It goes to curl
+  via `--config` from a mode-600 file, and every credential path is bracketed by
+  `np__secret_begin`/`np__secret_end`, because CI scripts routinely `set -x` and
+  shell options are global. `test/unit/http.sh` has a leak canary; keep it.
+- **Config comes from `np_trace_init` flags**, defaulted from **namespaced
+  `NP_TRACE_*`** environment variables only. Never read an ambient
+  `NULLPLATFORM_API_KEY` — an ambient key colliding with an explicit credential
+  is a real bug the sibling SDKs already hit.
+- **Security.** The bearer JWT is never verified here — the API verifies it.
+
+## Build / test
+
+```sh
+make lint && make test-all
+```
+
+`nptrace.sh` is a **generated file** — edit `src/*.sh` and rebuild.
+
+The live end-to-end suite is skipped unless `NP_LIVE_URL` is set:
+
+```sh
+# with the tracing API + projector running locally
+NP_LIVE_URL=http://localhost:8080 sh test/run.sh integration
+```
+
+Portability is the real risk in pure POSIX sh, so run the matrix before
+shipping anything:
+
+```sh
+NP_TEST_SHELL=/bin/dash make test-all
+NP_TEST_SHELL=/bin/bash sh test/run.sh all
+docker run --rm -v "$PWD:/w" -w /w busybox:latest sh test/run.sh all
+```
