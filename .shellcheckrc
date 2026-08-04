@@ -1,0 +1,12 @@
+# Sourced files are resolved at runtime (the built artifact, the test libs);
+# shellcheck cannot follow them and does not need to.
+disable=SC1091
+
+# Nearly every constant here IS the public surface — consumers read
+# NP_TRACE_VERSION, NP_STATUS_*, NP_FACET_* and friends. "Appears unused"
+# inside the SDK is the expected state for an exported vocabulary.
+disable=SC2034
+
+# The sourced-vs-executed guard (`return || exit`) and functions invoked only
+# through a trap or a dispatch table read as unreachable to static analysis.
+disable=SC2317

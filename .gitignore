@@ -1,0 +1,3 @@
+nptrace.sh.tmp
+*.tmp
+.nptrace-test/
