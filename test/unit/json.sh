@@ -46,4 +46,23 @@ if command -v jq >/dev/null 2>&1; then
   done
 fi
 
+assert_eq "$(np__json_obj a 1 b two)" '{"a":"1","b":"two"}' 'object with two pairs'
+assert_eq "$(np__json_obj a 1 b '')" '{"a":"1"}' 'empty value omitted'
+assert_eq "$(np__json_obj)" '{}' 'empty object'
+assert_eq "$(np__json_obj a 'q"q')" '{"a":"q\"q"}' 'object escapes values'
+assert_eq "$(np__json_obj '' v)" '{}' 'empty key omitted'
+assert_eq "$(np__json_obj_raw a '{"n":1}' b '[]')" '{"a":{"n":1},"b":[]}' 'raw values inserted verbatim'
+assert_eq "$(np__json_obj_raw a '' b '2')" '{"b":2}' 'raw empty value omitted'
+assert_eq "$(np__json_obj_raw)" '{}' 'empty raw object'
+
+# Everything the object builders produce must be valid JSON.
+if command -v jq >/dev/null 2>&1; then
+  assert_ok 'object output parses as JSON' \
+    sh -c "printf '%s' '$(np__json_obj a 1 b two)' | jq -e . >/dev/null"
+  nested=$(np__json_obj_raw outer "$(np__json_obj inner value)" n 42)
+  assert_eq "$nested" '{"outer":{"inner":"value"},"n":42}' 'nested object composes'
+  assert_ok 'nested output parses as JSON' \
+    sh -c "printf '%s' '$nested' | jq -e . >/dev/null"
+fi
+
 . "$ROOT/test/lib/report.sh"

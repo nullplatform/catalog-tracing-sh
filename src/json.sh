@@ -52,3 +52,36 @@ np__json_escape() {
 np__json_str() {
   printf '"%s"' "$(np__json_escape "$1")"
 }
+
+# A JSON object from alternating key/value arguments. Values are emitted as
+# JSON strings. A pair whose key or value is empty is OMITTED — an absent
+# optional is absent, never the string "".
+np__json_obj() {
+  _jo_out=''
+  while [ "$#" -ge 2 ]; do
+    if [ -n "$1" ] && [ -n "$2" ]; then
+      if [ -n "$_jo_out" ]; then
+        _jo_out="$_jo_out,"
+      fi
+      _jo_out="$_jo_out$(np__json_str "$1"):$(np__json_str "$2")"
+    fi
+    shift 2
+  done
+  printf '{%s}' "$_jo_out"
+}
+
+# As np__json_obj, but each value is already-formed JSON inserted verbatim.
+# Use for nested objects, arrays, numbers, and booleans.
+np__json_obj_raw() {
+  _jor_out=''
+  while [ "$#" -ge 2 ]; do
+    if [ -n "$1" ] && [ -n "$2" ]; then
+      if [ -n "$_jor_out" ]; then
+        _jor_out="$_jor_out,"
+      fi
+      _jor_out="$_jor_out$(np__json_str "$1"):$2"
+    fi
+    shift 2
+  done
+  printf '{%s}' "$_jor_out"
+}
