@@ -2,15 +2,29 @@
 # shell memory so handles survive process boundaries: in CI every pipeline step
 # is a fresh shell.
 
+# Create the state tree. If it cannot be created or written — a read-only
+# filesystem, a full disk, a bad NP_TRACE_DIR — the SDK degrades to a REAL
+# no-op rather than half-working: a half-initialised SDK whose next write fails
+# would take down a caller running under `set -e`, which is exactly the failure
+# mode tracing must never cause.
 np__state_init() {
   if [ -z "${NP_TRACE_DIR:-}" ]; then
     NP_TRACE_DIR="${TMPDIR:-/tmp}/nptrace.$$"
   fi
   export NP_TRACE_DIR
-  mkdir -p "$NP_TRACE_DIR/nodes" "$NP_TRACE_DIR/staged" \
-           "$NP_TRACE_DIR/spool" "$NP_TRACE_DIR/failed" 2>/dev/null || return 0
+  if ! mkdir -p "$NP_TRACE_DIR/nodes" "$NP_TRACE_DIR/staged" \
+                "$NP_TRACE_DIR/spool" "$NP_TRACE_DIR/failed" 2>/dev/null; then
+    NP_TRACE_ENABLED=0
+    return 0
+  fi
+  # Prove the tree is actually writable before trusting it.
+  if ! printf '0' > "$NP_TRACE_DIR/seq.probe" 2>/dev/null; then
+    NP_TRACE_ENABLED=0
+    return 0
+  fi
+  rm -f "$NP_TRACE_DIR/seq.probe" 2>/dev/null || :
   if [ ! -f "$NP_TRACE_DIR/seq" ]; then
-    printf '0' > "$NP_TRACE_DIR/seq"
+    printf '0' > "$NP_TRACE_DIR/seq" 2>/dev/null || :
   fi
   return 0
 }
