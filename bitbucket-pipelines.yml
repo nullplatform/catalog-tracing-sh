@@ -1,0 +1,39 @@
+# nullplatform CI for Bitbucket Pipelines.
+#
+# Contract:  np build start  ->  build the image  ->  np asset push  ->  np build update
+# There is no deploy step here: nullplatform triggers deployments itself.
+#
+# The only secret is NULLPLATFORM_API_KEY. nullplatform creates it as a *secured*
+# repository variable when the application is created, and Bitbucket injects every
+# repository variable into the step environment, so it is not declared below.
+#
+# Requires Pipelines to be ENABLED on the repository (Repository settings ->
+# Pipelines -> Settings). It is off by default, even with this file present.
+
+image: public.ecr.aws/nullplatform/np-cli:kaniko
+
+definitions:
+  steps:
+    - step: &nullplatform-build
+        name: nullplatform build
+        script:
+          - /np build start
+          # kaniko requires a --destination even with --no-push; `foo:1` is a throwaway.
+          - /kaniko/executor
+            --context "$BITBUCKET_CLONE_DIR"
+            --dockerfile "$BITBUCKET_CLONE_DIR/Dockerfile"
+            --no-push
+            --tarPath image.tar
+            --destination foo:1
+          - /np asset push --type docker-image --source image.tar
+          - /np build update --status=successful
+        after-script:
+          # Bitbucket has no `if: always()` and no `when: on_failure`.
+          # BITBUCKET_EXIT_CODE is defined ONLY in after-script, and after-script
+          # always runs -- this is the failure path.
+          - if [ "$BITBUCKET_EXIT_CODE" -ne 0 ]; then /np build update --status=failed; fi
+
+pipelines:
+  branches:
+    main:
+      - step: *nullplatform-build
