@@ -1,3 +1,8 @@
 nptrace.sh.tmp
 *.tmp
 .nptrace-test/
+
+# Editors / OS
+.idea
+.vscode
+.DS_Store
