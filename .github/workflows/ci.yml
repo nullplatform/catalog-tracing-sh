@@ -43,13 +43,20 @@ jobs:
 
   # busybox ash is the most limited shell/awk/od combination we support, and the
   # one most likely to be the CI image a consumer actually runs in.
+  #
+  # This does NOT use `container: busybox`: actions/checkout is a JS action, and
+  # busybox is musl-based with no glibc, so the runner's own Node cannot start
+  # inside it (libdl.so.2 missing). Check out on the host and run busybox via
+  # docker instead — which is also exactly how it is run locally.
   test-busybox:
     runs-on: ubuntu-latest
-    container: busybox:latest
     steps:
       - uses: actions/checkout@v4
-      - run: sh build.sh
-      - run: sh test/run.sh all
+      - name: Run the suites under busybox ash
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w busybox:latest sh -c '
+            sh build.sh && sh test/run.sh all
+          '
 
   # nptrace.sh is generated from src/*.sh and committed so consumers can vendor
   # it without a build step. A stale artifact is a release footgun.
