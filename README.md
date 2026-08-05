@@ -338,4 +338,8 @@ NP_LIVE_URL=http://localhost:8080 sh test/run.sh integration
 ```
 
 See [`CLAUDE.md`](./CLAUDE.md) for the working agreements, including the
-wire-contract sync procedure.
+wire-contract sync procedure, and [`docs/DESIGN.md`](./docs/DESIGN.md) for why
+the SDK is shaped the way it is — the settled decisions, the state and ambient
+model, the availability guarantee, and the two deliberate divergences from the
+TypeScript and Go SDKs. [`docs/PLAN-phase-1.md`](./docs/PLAN-phase-1.md) is the
+delivery record for Phase 1 and scopes what Phase 2 still owes.
