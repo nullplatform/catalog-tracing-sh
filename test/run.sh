@@ -17,6 +17,15 @@ run_dir() {
     code=$?
     printf '%s\n' "$out" | grep -v '^__COUNTS__ ' || :
     counts=$(printf '%s\n' "$out" | sed -n 's/^__COUNTS__ //p')
+    # A suite that never sources report.sh emits no counts. Treating that as
+    # "0 assertions, 0 failures" makes its failures invisible: the suite prints
+    # FAIL lines, the runner adds nothing, and CI goes green on broken code.
+    if [ -z "$counts" ]; then
+      TOTAL_FAIL=$((TOTAL_FAIL + 1))
+      printf 'FAIL: suite %s reported no counts (is report.sh sourced at the end?)\n' \
+        "${suite##*/}" >&2
+      continue
+    fi
     ran=${counts%% *}
     failed=${counts##* }
     [ -n "$ran" ] || ran=0

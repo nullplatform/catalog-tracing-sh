@@ -2,7 +2,7 @@
 # Concatenate src modules into the single distributable nptrace.sh.
 set -eu
 OUT=${1:-nptrace.sh}
-MODULES='header compat json uuid identity wire state spool http flush api cli'
+MODULES='header compat json uuid identity wire state spool http flush propagation api cli'
 {
   for module in $MODULES; do
     printf '\n# ---- src/%s.sh ----\n' "$module"
