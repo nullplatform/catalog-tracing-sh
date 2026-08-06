@@ -7,7 +7,10 @@
 # result. Sourcing nptrace.sh into the bats shell would silently reduce the
 # whole matrix to a bash-only suite.
 
-NPTRACE="$BATS_TEST_DIRNAME/../../nptrace.sh"
+# The suites exercise the BUILT artifact — the single file consumers vendor —
+# not src/*.sh, so what is tested is what ships.
+NP_ROOT="$BATS_TEST_DIRNAME/../.."
+NPTRACE="$NP_ROOT/nptrace.sh"
 NP_TEST_SHELL="${NP_TEST_SHELL:-/bin/sh}"
 export NPTRACE NP_TEST_SHELL
 
@@ -57,6 +60,16 @@ setup() {
   # worse, passes for any test expecting empty. Fail on the real cause instead.
   if [ ! -f "$NPTRACE" ]; then
     printf 'nptrace.sh not found at %s (run ./build.sh)\n' "$NPTRACE" >&2
+    return 1
+  fi
+  # `make test` rebuilds first, but running bats directly does not — so an edit
+  # to src/ would otherwise be silently tested against the previous build, and
+  # pass. Refuse to run rather than report a green result for stale code.
+  local stale
+  stale=$(find "$NP_ROOT/src" "$NP_ROOT/build.sh" -newer "$NPTRACE" 2>/dev/null | head -1)
+  if [ -n "$stale" ]; then
+    printf 'nptrace.sh is stale (%s is newer) — run ./build.sh\n' \
+      "${stale#"$NP_ROOT"/}" >&2
     return 1
   fi
   NP_TRACE_DIR="$BATS_TEST_TMPDIR/nptrace"
