@@ -34,28 +34,35 @@ jobs:
         shell: [/bin/dash, /bin/bash]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y dash jq
+      - run: sudo apt-get update && sudo apt-get install -y dash jq bats
       - run: ./build.sh
       - name: Run the suites
         env:
           TEST_SHELL: ${{ matrix.shell }}
-        run: NP_TEST_SHELL="$TEST_SHELL" sh test/run.sh all
+        # bats runs in bash; NP_TEST_SHELL is the shell the SDK is exercised in.
+        run: NP_TEST_SHELL="$TEST_SHELL" bats test/unit test/integration
 
   # busybox ash is the most limited shell/awk/od combination we support, and the
   # one most likely to be the CI image a consumer actually runs in.
   #
-  # This does NOT use `container: busybox`: actions/checkout is a JS action, and
-  # busybox is musl-based with no glibc, so the runner's own Node cannot start
-  # inside it (libdl.so.2 missing). Check out on the host and run busybox via
-  # docker instead — which is also exactly how it is run locally.
+  # alpine rather than busybox: /bin/sh IS busybox there, so the SDK still runs
+  # under busybox ash, but bash (for bats) and jq are one apk away. The bare
+  # busybox image has neither, which meant the jq differential checks silently
+  # skipped on the leg that needed them most.
+  #
+  # Still not `container:`: actions/checkout is a JS action and alpine is musl,
+  # so the runner's own Node cannot start inside it. Check out on the host and
+  # run the container ourselves — also exactly how `make test-busybox` runs it.
   test-busybox:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run the suites under busybox ash
         run: |
-          docker run --rm -v "$PWD:/w" -w /w busybox:latest sh -c '
-            sh build.sh && sh test/run.sh all
+          docker run --rm -v "$PWD:/w" -w /w alpine:latest sh -c '
+            apk add --no-cache bash bats jq >/dev/null
+            sh build.sh >/dev/null
+            NP_TEST_SHELL=/bin/sh bats test/unit test/integration
           '
 
   # nptrace.sh is generated from src/*.sh and committed so consumers can vendor
