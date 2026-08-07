@@ -265,6 +265,18 @@ np__stage_facet() {
   return 0
 }
 
+# Staged context normally rides the node's NEXT lifecycle emit. A FOREIGN
+# (adopted) node never has one here — its owner closes it in another process —
+# so anything staged on it would die in local state. Re-emit `started` with the
+# full current bag instead (additive, the same shape the JS SDK's
+# late-enrichment flush produces): the fold keeps the node's real outcome (the
+# owner's terminal is later by time) and gains the facts this process observed.
+np__flush_foreign() {
+  [ "$(np__node_get "$1" foreign)" = '1' ] || return 0
+  np__emit_node "$1" "$NP_STATUS_STARTED"
+  return 0
+}
+
 # np_trace_labels [handle] key=value ...
 np_trace_labels() {
   _lb_h=$(np__resolve_handle "${1:-}")
@@ -284,6 +296,7 @@ np_trace_labels() {
       np__stage_label "$_lb_h" "$(np__json_str "$_lb_k"):$(np__json_str "$_lb_v")"
     fi
   done
+  np__flush_foreign "$_lb_h"
   return 0
 }
 
@@ -298,6 +311,7 @@ np_trace_facet() {
     return 0
   fi
   np__stage_facet "$_fc_h" "$1" "$2"
+  np__flush_foreign "$_fc_h"
   return 0
 }
 
@@ -341,6 +355,7 @@ np_trace_explain() {
   np__stage_facet "$_ex_h" "$NP_FACET_EXPLAIN" \
     "$(np__json_obj title "$_ex_title" severity "$_ex_sev" what "$_ex_what" \
         why "$_ex_why" impact "$_ex_impact" next "$_ex_next")"
+  np__flush_foreign "$_ex_h"
   return 0
 }
 
@@ -369,6 +384,7 @@ np_trace_error() {
   [ -n "$_er_msg" ] || return 0
   np__stage_facet "$_er_h" "$NP_FACET_ERROR" \
     "$(np__json_obj message "$_er_msg" code "$_er_code" stack_trace "$_er_stack")"
+  np__flush_foreign "$_er_h"
   return 0
 }
 
@@ -446,6 +462,14 @@ np_trace_fail() {
   _fa_h=$(np__resolve_handle "${1:-}")
   if np__is_handle "${1:-}"; then
     shift
+  fi
+  # Refuse a foreign fail WHOLE, before the message stages: half-applying it
+  # (error facet emitted via the foreign flush, close refused) would smear an
+  # unowned outcome onto the node. Recording an observed fact on a foreign
+  # node is np_trace_error, deliberately.
+  if np__is_foreign "$_fa_h"; then
+    np__drop 'terminal' 'refusing to close an adopted node'
+    return 0
   fi
   if [ -n "${1:-}" ]; then
     np_trace_error "$_fa_h" --message "$1"
