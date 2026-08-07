@@ -126,3 +126,64 @@ TRACE='0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
   "
   assert_nok
 }
+
+# ── foreign enrichment: facts on an adopted node must reach the wire NOW ──
+# An adopted node's owner closes it in another process, so nothing staged here
+# would ever ride a local lifecycle emit. Setters on a foreign node therefore
+# re-emit `started` with the full current bag — the same shape the JS SDK's
+# late-enrichment flush produces.
+
+@test "an error recorded on an adopted node reaches the spool immediately" {
+  np_sh_state '
+    h=$(np_trace_adopt "1|trace-9|scope-42~iam@0.0")
+    np_trace_error "$h" --message "role creation denied" --code EACCESS
+    wire
+  '
+  assert_ok
+  echo "$output" | jq -e '
+    select(.type == "node.run")
+    | select(.data.run_id == "scope-42~iam@0.0")
+    | select(.data.status == "started")
+    | .data.facets["tracing.error"]
+    | (.message == "role creation denied" and .code == "EACCESS")
+  ' >/dev/null
+}
+
+@test "labels on an adopted node re-emit with the full current bag" {
+  np_sh_state '
+    h=$(np_trace_adopt "1|t|r~wait@0.0")
+    np_trace_labels "$h" "wait.elapsed_s=90" "wait.timeout_s=300"
+    wire
+  '
+  assert_ok
+  echo "$output" | jq -e '
+    select(.type == "node.run") | select(.data.run_id == "r~wait@0.0")
+    | .data.labels
+    | (.["wait.elapsed_s"] == "90" and .["wait.timeout_s"] == "300")
+  ' >/dev/null
+}
+
+@test "each foreign setter is its own event — successive errors are all observable" {
+  np_sh_state '
+    h=$(np_trace_adopt "1|t|r~apply@0.0")
+    np_trace_error "$h" --message "first failure"
+    np_trace_error "$h" --message "second failure"
+    wire | grep -c "node.run"
+  '
+  assert_out '2'
+}
+
+@test "owned nodes still stage: a setter alone emits nothing extra" {
+  # The owner terminal carries staged context, exactly as before — the re-emit
+  # is FOREIGN-only, so owned flows gain no event-volume.
+  np_sh_state '
+    run=$(np_trace_run --trace-id t --run-id my-own-run)
+    np_trace_error "$run" --message "will ride the terminal"
+    count_before=$(wire | grep -c "node.run" || true)
+    np_trace_fail "$run"
+    count_after=$(wire | grep -c "node.run")
+    printf "%s %s" "$count_before" "$count_after"
+  '
+  # nothing before the terminal; started+failed after
+  assert_out '0 2'
+}
