@@ -80,7 +80,7 @@ The live end-to-end suite is skipped unless `NP_LIVE_URL` is set:
 
 ```sh
 # with the tracing API + projector running locally
-NP_LIVE_URL=http://localhost:8080 sh test/run.sh integration
+NP_LIVE_URL=http://localhost:8080 bats test/integration
 ```
 
 Portability is the real risk in pure POSIX sh, so run the matrix before
@@ -88,6 +88,21 @@ shipping anything:
 
 ```sh
 NP_TEST_SHELL=/bin/dash make test-all
-NP_TEST_SHELL=/bin/bash sh test/run.sh all
-docker run --rm -v "$PWD:/w" -w /w busybox:latest sh test/run.sh all
+NP_TEST_SHELL=/bin/bash make test-all
+make test-busybox
 ```
+
+## Releases
+
+**nullplatform owns the version.** It cuts a release from a green build and
+`nullplatform-github-integration[bot]` creates the GitHub Release; the tag is
+the version. Tags are **bare — no `v` prefix** (`0.1.0`, matching
+catalog-tracing-js and the CLI).
+
+`NP_TRACE_VERSION` in `src/header.sh` is therefore **not** the source of truth.
+`publish.yml` stamps it from the release tag before building the artifact it
+uploads, and `mirror-version.yml` writes it back into `main` afterwards. Do not
+bump it by hand to cut a release — that only desynchronises the two.
+
+The release artifact is published to `cli.nullplatform.com/tracing-sh/<version>/`,
+because `nullplatform/scopes` is public and cannot curl from this private repo.

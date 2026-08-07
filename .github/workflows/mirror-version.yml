@@ -1,0 +1,85 @@
+name: mirror-version
+
+# nullplatform owns the version. When it cuts a release and creates the matching
+# GitHub Release, this mirrors the release tag into src/header.sh on main, so the
+# repo and local/dev runs report the real version. publish.yml already stamps the
+# version into the *published* artifact at publish time; this is the separate,
+# repo-side mirror. It is its own workflow so publish.yml — which holds the AWS
+# OIDC trust — keeps contents:read and never needs repo-write.
+#
+# Unlike the JS SDK's mirror, this one must also run ./build.sh: NP_TRACE_VERSION
+# is concatenated into the committed nptrace.sh, and CI's built-artifact-is-current
+# job fails if the artifact and src/ disagree. Both files move together or neither.
+#
+# main is PR-protected, so the bot can't push directly — it opens a one-file PR and
+# merges it itself. This works when the branch ruleset requires a PR but no approvals
+# and no required status checks; if it requires either, the bot can't self-merge and
+# the workflow leaves the PR open with a warning to merge it manually. The squash
+# commit carries [skip ci] so the mirror doesn't trigger a redundant CI run.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mirror the release version into src/header.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Via env (never inlined into the script) so a crafted tag can't inject shell.
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+
+          # Validate before anything touches a file: an invalid or hostile tag
+          # fails here, before any sed, branch or commit.
+          if ! printf '%s' "$VERSION" \
+            | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$RELEASE_TAG' is not a semantic version"
+            exit 1
+          fi
+
+          sed -i "s/^NP_TRACE_VERSION=\".*\"\$/NP_TRACE_VERSION=\"$VERSION\"/" src/header.sh
+          ./build.sh
+
+          if git diff --quiet -- src/header.sh nptrace.sh; then
+            echo "already at ${VERSION} — nothing to mirror"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="release/mirror-${VERSION}"
+          # Clear any leftover branch from a failed prior run so the push is clean.
+          git push origin --delete "$BRANCH" 2>/dev/null || true
+          git switch -c "$BRANCH"
+          git add src/header.sh nptrace.sh
+          git commit -m "chore(release): mirror version ${VERSION} [skip ci]"
+          git push -u origin "$BRANCH"
+
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore(release): mirror version ${VERSION}" \
+            --body "Automated mirror of the nullplatform release version into src/header.sh and the built nptrace.sh. [skip ci]"
+
+          # The bot merges its own PR. Mergeability is computed asynchronously, so retry.
+          for attempt in $(seq 1 6); do
+            if gh pr merge "$BRANCH" --squash --delete-branch \
+                 --subject "chore(release): mirror version ${VERSION} [skip ci]" --body ""; then
+              echo "mirrored ${VERSION} into main"
+              exit 0
+            fi
+            echo "merge not ready (attempt ${attempt}/6); waiting…"
+            sleep 5
+          done
+
+          echo "::warning::version-mirror PR for ${VERSION} could not be auto-merged; merge it manually"

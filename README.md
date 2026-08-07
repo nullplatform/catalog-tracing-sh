@@ -49,15 +49,20 @@ recorded as `"null"`, so a missing optional never becomes a fake label.
 
 ## Install
 
-Vendor the single generated file, pinned to a release tag:
+Vendor the single generated file, pinned to a release, and check it:
 
 ```sh
-curl -fsSL -o nptrace.sh \
-  https://raw.githubusercontent.com/nullplatform/catalog-tracing-sh/vX.Y.Z/nptrace.sh
+BASE=https://cli.nullplatform.com/tracing-sh/0.1.0
+curl -fsSL -O "$BASE/nptrace.sh"
+curl -fsSL "$BASE/nptrace.sh.sha256" | sha256sum -c
 ```
 
-Or commit `nptrace.sh` into your repo. It is self-contained — there is nothing
-to build and nothing to install.
+A published version never changes, so pin one. `tracing-sh/latest/` also exists
+and moves on every release, which makes it the wrong choice for any build you
+want to be reproducible.
+
+Then commit `nptrace.sh` into your repo. It is self-contained — there is
+nothing to build and nothing to install.
 
 ## The guarantee: a down API never breaks your build
 

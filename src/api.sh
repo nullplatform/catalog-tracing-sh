@@ -409,6 +409,13 @@ np__terminalize() {
   if [ "$(np__node_get "$1" closed)" = '1' ]; then
     return 0
   fi
+  # An adopted node belongs to the process that created it. Its owner decides
+  # its outcome; emitting a terminal here would assert a state we did not
+  # observe, and would race the owner's own terminal event.
+  if np__is_foreign "$1"; then
+    np__drop 'terminal' 'refusing to close an adopted node'
+    return 0
+  fi
   np_trace_start "$1"
   np__stage_timing "$1" "$(np__iso8601)"
   np__node_set "$1" closed 1
