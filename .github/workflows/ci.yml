@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write # the nullplatform CLI authenticates via the GitHub OIDC token
 
 jobs:
   lint:
@@ -79,6 +78,9 @@ jobs:
     needs: [lint, test, test-busybox, built-artifact-is-current]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # the nullplatform CLI authenticates via the GitHub OIDC token
     steps:
       - uses: actions/checkout@v4
 

@@ -26,8 +26,8 @@ make_dev_token() {
   b64url() { base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='; }
   hdr=$(printf '%s' '{"alg":"HS256","typ":"JWT"}' | b64url)
   pl=$(printf '{"sub":"1234567890","cognito:groups":["@nullplatform/user=%s","@nullplatform/organization=%s"],"organization":%s,"user":%s,"iat":%s,"exp":%s}' \
-    "${NP_LIVE_USER:-1}" "${NP_LIVE_ORG:-1255165411}" \
-    "${NP_LIVE_ORG:-1255165411}" "${NP_LIVE_USER:-1}" \
+    "${NP_LIVE_USER:-1}" "${NP_LIVE_ORG:-1}" \
+    "${NP_LIVE_ORG:-1}" "${NP_LIVE_USER:-1}" \
     "$now" "$((now + 3600))" | b64url)
   printf 'Bearer %s.%s.devsig' "$hdr" "$pl"
 }

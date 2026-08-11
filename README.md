@@ -49,17 +49,23 @@ recorded as `"null"`, so a missing optional never becomes a fake label.
 
 ## Install
 
-Vendor the single generated file, pinned to a release, and check it:
+Vendor the single generated file, pinned to a release tag:
 
 ```sh
-BASE=https://cli.nullplatform.com/tracing-sh/0.1.0
+curl -fsSL -o nptrace.sh \
+  https://raw.githubusercontent.com/nullplatform/catalog-tracing-sh/<version>/nptrace.sh
+```
+
+Or fetch the checksummed copy from the artifact mirror:
+
+```sh
+BASE=https://cli.nullplatform.com/tracing-sh/<version>
 curl -fsSL -O "$BASE/nptrace.sh"
 curl -fsSL "$BASE/nptrace.sh.sha256" | sha256sum -c
 ```
 
-A published version never changes, so pin one. `tracing-sh/latest/` also exists
-and moves on every release, which makes it the wrong choice for any build you
-want to be reproducible.
+A published version never changes, so pin one — never a moving pointer like
+`latest/`, which makes a build unreproducible.
 
 Then commit `nptrace.sh` into your repo. It is self-contained — there is
 nothing to build and nothing to install.
