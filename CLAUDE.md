@@ -104,5 +104,15 @@ catalog-tracing-js and the CLI).
 uploads, and `mirror-version.yml` writes it back into `main` afterwards. Do not
 bump it by hand to cut a release — that only desynchronises the two.
 
-The release artifact is published to `cli.nullplatform.com/tracing-sh/<version>/`,
-because `nullplatform/scopes` is public and cannot curl from this private repo.
+**Distribution is the repository itself** — consumers add it as a git
+submodule pinned to a release tag (or vendor the one file for archive-safe
+setups, e.g. `nullplatform/scopes`, whose agent image is built from a
+Docker build context where submodules may be silently absent). The built
+`nptrace.sh` is committed and CI-enforced current, so a checkout is always
+ready to source.
+
+Known nuance: a release tag's tree carries the PREVIOUS `NP_TRACE_VERSION`
+— the platform tags a green commit first, and mirror-version.yml stamps
+the new version into main afterwards. Producer attribution therefore lags
+one release for consumers pinning tags; pin the mirror commit when that
+matters.

@@ -49,26 +49,39 @@ recorded as `"null"`, so a missing optional never becomes a fake label.
 
 ## Install
 
-Vendor the single generated file, pinned to a release tag:
+Add the repository as a **git submodule**, pinned to a release tag:
+
+```sh
+git submodule add https://github.com/nullplatform/catalog-tracing-sh.git vendor/nptrace
+git -C vendor/nptrace checkout <version>
+git add vendor/nptrace && git commit -m "chore: pin nptrace <version>"
+```
+
+```sh
+# in your scripts:
+. "$(dirname "$0")/vendor/nptrace/nptrace.sh"
+```
+
+The built `nptrace.sh` is committed here and CI refuses any drift from
+`src/`, so a submodule checkout is always ready to source — nothing to
+build. The pinned commit is your version pin; bump it deliberately on
+releases.
+
+Two caveats inherent to submodules — if either bites, vendor instead:
+
+- Cloners must use `git clone --recurse-submodules` (and CI checkouts need
+  their submodule option); a plain clone leaves the directory empty.
+- **Archive exports do not contain submodules.** GitHub's "Download ZIP",
+  release source tarballs, `git archive`, and a Docker `COPY` of an
+  uninitialized submodule all silently omit it.
+
+**Vendoring** (the archive-safe alternative): copy the one file, pinned to
+a release tag, and commit it to your repo:
 
 ```sh
 curl -fsSL -o nptrace.sh \
   https://raw.githubusercontent.com/nullplatform/catalog-tracing-sh/<version>/nptrace.sh
 ```
-
-Or fetch the checksummed copy from the artifact mirror:
-
-```sh
-BASE=https://cli.nullplatform.com/tracing-sh/<version>
-curl -fsSL -O "$BASE/nptrace.sh"
-curl -fsSL "$BASE/nptrace.sh.sha256" | sha256sum -c
-```
-
-A published version never changes, so pin one — never a moving pointer like
-`latest/`, which makes a build unreproducible.
-
-Then commit `nptrace.sh` into your repo. It is self-contained — there is
-nothing to build and nothing to install.
 
 ## The guarantee: a down API never breaks your build
 
