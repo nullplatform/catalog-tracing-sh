@@ -179,3 +179,59 @@ load '../helper'
   assert_out_match '*rc=0*'
   ! [[ "$output" == *'edge.produces'* ]]
 }
+
+@test "inline output rides the node terminal with its value carried whole" {
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_output "$run" instances "{\"healthy\":2,\"desired\":3}"
+    np_trace_complete "$run"
+    wire
+  '
+  assert_out_match '*"tracing.output":\[{"kind":"inline","name":"instances","value":{"healthy":2,"desired":3}}\]*'
+}
+
+@test "inline and pointer descriptors accumulate in one io array" {
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_produces "$run" "k8s-service:ns/svc" --name service --uri "ns/svc"
+    np_trace_output "$run" instances "{\"healthy\":3}"
+    np_trace_complete "$run"
+    wire
+  '
+  assert_out_match '*"tracing.output":\[{"kind":"pointer","name":"service","uri":"ns/svc"},{"kind":"inline","name":"instances","value":{"healthy":3}}\]*'
+}
+
+@test "inline input is the mirror, and garbage values are drops" {
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_input "$run" traffic "{\"from\":0,\"desired\":100}"
+    np_trace_input "$run" bad "not json"
+    echo "rc=$?"
+    np_trace_complete "$run"
+    wire
+  '
+  assert_out_match '*rc=0*'
+  assert_out_match '*"tracing.input":\[{"kind":"inline","name":"traffic","value":{"from":0,"desired":100}}\]*'
+  ! [[ "$output" == *'not json'* ]]
+}
+
+@test "error --details carries the structured evidence" {
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_error "$run" --message "gave up" --details "{\"healthy\":1,\"desired\":3}"
+    np_trace_fail "$run"
+    wire
+  '
+  assert_out_match '*"tracing.error":{"message":"gave up","details":{"healthy":1,"desired":3}}*'
+}
+
+@test "inline io on an adopted node reaches the wire via the foreign re-emit" {
+  np_sh_state '
+    export NP_TRACE="1|tr9|upstream-run~wait@0.0"
+    node=$(np_trace_adopt)
+    np_trace_output "$node" instances "{\"healthy\":1}"
+    wire
+  '
+  assert_out_match '*"run_id":"upstream-run~wait@0.0"*'
+  assert_out_match '*"tracing.output":\[{"kind":"inline","name":"instances","value":{"healthy":1}}\]*'
+}

@@ -330,8 +330,8 @@ Phase 2: the remaining core-facet setters (`actor`, `external_links`,
 `engine_status`, `dropped`, `plan`, `decision`,
 `retry`, `signal`); the remaining edge functions (`triggered_by`, `retry_of`,
 `continues`, `correlates`, `instance_of`, `compensates`,
-`link`); the standalone io builders (the pointer form is built into
-`produces`/`consumes` via `--name`/`--uri`); the ref constructors; `dataset`
+`link`); the remaining io builder variants (inline ships as `output`/`input`,
+pointer via `--name`/`--uri` on `produces`/`consumes`); the ref constructors; `dataset`
 and `job` nodes; and the subcommand CLI mode.
 
 ## Wire contract version
