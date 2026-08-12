@@ -416,6 +416,189 @@ np__stage_timing() {
 }
 
 # ---------------------------------------------------------------------------
+# Lineage — produces/consumes edges with io pointers
+# ---------------------------------------------------------------------------
+
+# A dataset ref for an edge endpoint. The id is the CANONICAL dataset id — the
+# exact string a producer and a consumer must both name for lineage to join
+# them by value (an ARN, an FQDN, `<type>:<url>` for an asset) — never a
+# synthesised id.
+np__dataset_ref() {
+  np__json_obj type dataset id "$1"
+}
+
+# np__emit_io_edge <handle> <direction> <dataset-id> [pointer-name] [pointer-uri]
+#
+# Emit one lineage edge. The direction decides everything else: `out` is
+# edge.produces + tracing.output, `in` is edge.consumes + tracing.input.
+#
+# With a pointer (name + uri) the io is declared ONCE: the descriptor
+# accumulates into the node's io facet AND becomes the edge's tracing.binding
+# — the same single-source rule as the sibling SDKs. Without one, the edge
+# records lineage only.
+#
+# On a FOREIGN (adopted) node this is an observed fact, exactly like
+# np_trace_error: the edge is ours to say, and the staged io facet reaches the
+# wire through the foreign re-emit.
+np__emit_io_edge() {
+  _io_handle=$1
+  _io_direction=$2
+  _io_dataset_id=$3
+  _io_pointer_name=${4:-}
+  _io_pointer_uri=${5:-}
+
+  if [ "$_io_direction" = 'out' ]; then
+    _io_edge_type=$NP_TYPE_EDGE_PRODUCES
+    _io_facet_namespace=$NP_FACET_OUTPUT
+    _io_descriptor_store=io_output
+  else
+    _io_edge_type=$NP_TYPE_EDGE_CONSUMES
+    _io_facet_namespace=$NP_FACET_INPUT
+    _io_descriptor_store=io_input
+  fi
+
+  _io_pointer=''
+  if [ -n "$_io_pointer_name" ] && [ -n "$_io_pointer_uri" ]; then
+    _io_pointer=$(np__json_obj kind pointer name "$_io_pointer_name" uri "$_io_pointer_uri")
+    # Append to the direction's descriptor list; the facet is re-staged whole
+    # each time (last write wins per namespace), so the array only ever grows.
+    _io_descriptors=$(np__node_get "$_io_handle" "$_io_descriptor_store")
+    if [ -n "$_io_descriptors" ]; then
+      _io_descriptors="$_io_descriptors,$_io_pointer"
+    else
+      _io_descriptors=$_io_pointer
+    fi
+    np__node_set "$_io_handle" "$_io_descriptor_store" "$_io_descriptors"
+    np__stage_facet "$_io_handle" "$_io_facet_namespace" "[$_io_descriptors]"
+  fi
+
+  # An edge must not point FROM a node the read model has never seen.
+  np_trace_start "$_io_handle"
+
+  if [ -n "$_io_pointer" ]; then
+    _io_edge_data=$(np__json_obj_raw \
+      from "$(np__ref_of "$_io_handle")" \
+      to "$(np__dataset_ref "$_io_dataset_id")" \
+      facets "{$(np__json_str "$NP_FACET_BINDING"):$_io_pointer}")
+  else
+    _io_edge_data=$(np__json_obj_raw \
+      from "$(np__ref_of "$_io_handle")" \
+      to "$(np__dataset_ref "$_io_dataset_id")")
+  fi
+  np__spool "$_io_edge_type" "$(np__node_get "$_io_handle" nrn)" "$_io_edge_data" >/dev/null
+  np__flush_foreign "$_io_handle"
+  return 0
+}
+
+# The shared argv handling of np_trace_produces / np_trace_consumes:
+# resolve the optional leading handle, take the dataset id, parse the
+# pointer flags, and hand off to np__emit_io_edge.
+# $1 direction (out|in), $2 verb name for drop records, then the caller's argv.
+np__lineage_verb() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  _lv_direction=$1
+  _lv_verb=$2
+  shift 2
+
+  _lv_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_lv_handle" || { np__drop "$_lv_verb" 'no node in scope'; return 0; }
+
+  _lv_dataset_id=${1:-}
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
+  if [ -z "$_lv_dataset_id" ]; then
+    np__drop "$_lv_verb" 'dataset id is required'
+    return 0
+  fi
+
+  _lv_pointer_name=''
+  _lv_pointer_uri=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name) _lv_pointer_name=${2:-}; shift 2 ;;
+      --uri) _lv_pointer_uri=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  np__emit_io_edge "$_lv_handle" "$_lv_direction" "$_lv_dataset_id" \
+    "$_lv_pointer_name" "$_lv_pointer_uri"
+  return 0
+}
+
+# np_trace_produces [handle] <dataset-id> [--name <n> --uri <locator>]
+#
+# Declare this node WROTE the dataset. `--name`/`--uri` record the io as a
+# pointer descriptor (the artifact's address) on both the node and the edge.
+np_trace_produces() {
+  np__lineage_verb out produces "$@"
+  return 0
+}
+
+# np_trace_consumes [handle] <dataset-id> [--name <n> --uri <locator>]
+#
+# Declare this node READ the dataset; see np_trace_produces.
+np_trace_consumes() {
+  np__lineage_verb in consumes "$@"
+  return 0
+}
+
+# np_trace_affordances [handle] <json>
+#
+# What this node OFFERS a human to do — a declared fact the UI renders as a
+# control (view live logs, switch traffic). One affordance object
+# ('{"kind":"deploy-log",...}') or a bare array of them; the wire form is
+# always the array.
+np_trace_affordances() {
+  _af_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_af_handle" || return 0
+  _af_body=${1:-}
+  case "$_af_body" in
+    \[*) ;;
+    \{*) _af_body="[$_af_body]" ;;
+    *) np__drop 'affordances' 'body must be a JSON object or array'; return 0 ;;
+  esac
+  np__stage_facet "$_af_handle" "$NP_FACET_AFFORDANCES" "$_af_body"
+  np__flush_foreign "$_af_handle"
+  return 0
+}
+
+# np_trace_progress [handle] <current> <target> [unit]
+#
+# How far a CONVERGING phase has advanced toward its declared target —
+# instances 3 of 10, traffic 40 of 100. Non-negative integers; the optional
+# unit names what is counted ("percent", "instances").
+np_trace_progress() {
+  _pg_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_pg_handle" || return 0
+  _pg_current=${1:-}
+  _pg_target=${2:-}
+  _pg_unit=${3:-}
+  if [ -z "$_pg_current" ] || [ -z "$_pg_target" ]; then
+    np__drop 'progress' 'current and target must be non-negative integers'
+    return 0
+  fi
+  case "$_pg_current$_pg_target" in
+    *[!0-9]*) np__drop 'progress' 'current and target must be non-negative integers'; return 0 ;;
+  esac
+  np__stage_facet "$_pg_handle" "$NP_FACET_PROGRESS" \
+    "$(np__json_obj_raw current "$_pg_current" target "$_pg_target" \
+        unit "$(if [ -n "$_pg_unit" ]; then np__json_str "$_pg_unit"; fi)")"
+  np__flush_foreign "$_pg_handle"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Lifecycle terminals
 # ---------------------------------------------------------------------------
 

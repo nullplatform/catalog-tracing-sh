@@ -321,16 +321,18 @@ The gap this most often catches is **untraced updates** (row 2): `create` and
 `delete` are traced, but a plain `update` opens no run, so "what changed, and
 did the last update fail?" is unanswerable.
 
-Rows for lineage and plan-progress arrive with Phase 2.
+Lineage rows are answered by `np_trace_produces`/`np_trace_consumes`;
+plan-progress arrives with Phase 2.
 
 ## Not yet implemented
 
 Phase 2: the remaining core-facet setters (`actor`, `external_links`,
-`affordances`, `progress`, `engine_status`, `dropped`, `plan`, `decision`,
-`retry`, `signal`); the nine edge functions (`triggered_by`, `retry_of`,
-`continues`, `correlates`, `instance_of`, `compensates`, `produces`, `consumes`,
-`link`); the six io builders; the ref constructors; `dataset` and `job` nodes;
-propagation (`inject`/`extract`); and the subcommand CLI mode.
+`engine_status`, `dropped`, `plan`, `decision`,
+`retry`, `signal`); the remaining edge functions (`triggered_by`, `retry_of`,
+`continues`, `correlates`, `instance_of`, `compensates`,
+`link`); the standalone io builders (the pointer form is built into
+`produces`/`consumes` via `--name`/`--uri`); the ref constructors; `dataset`
+and `job` nodes; and the subcommand CLI mode.
 
 ## Wire contract version
 
