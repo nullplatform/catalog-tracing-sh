@@ -1,0 +1,194 @@
+# nullplatform tracing (POSIX shell SDK) — usage guide for code assistants
+
+> Producer SDK for emitting trace events to the nullplatform tracing API from
+> shell scripts, aimed at CI pipelines. This file is optimized for an AI coding
+> assistant writing **consumer** shell code. Every symbol below is the
+> **current** API — patterns marked ❌ MUST NOT be generated.
+
+Pure POSIX `sh` + `curl`. No bash-isms, no `jq` at runtime, no binary.
+
+**Phase 1.** Lifecycle, labels, explain, error, timing and custom facets are
+implemented. The edge functions, io builders, propagation, the remaining
+setters, and the subcommand CLI mode are NOT yet available — do not generate
+calls to them (full list at the bottom).
+
+---
+
+## Prime directives (read first)
+
+1. **Speak the wire vocabulary. Never rename or invent concepts.** Facet and
+   field names are fixed. A step's occurrence coordinates are `key`, `attempt`,
+   `iteration` — never `step_key`.
+2. **Identity is the OPERATION; the entity is a LABEL.** `trace_id`/`run_id`
+   name what RAN — `np_trace_key <entity> <action> "$(np_trace_occurrence)"`,
+   with `trace_id == run_id` for a root run — never the entity's own id. Carry
+   the entity as labels (`<entity>.id` once known, each `<parent>.id` from the
+   start). This is what lets a create be traced before its id exists, and a
+   failed insert still be found.
+3. **Pass the handle.** Every open returns an opaque handle; pass it to setters
+   and terminals. The handle argument is optional and falls back to the
+   innermost open node — but ambient is undefined for parallel/backgrounded work
+   and does not survive a fresh CI step process.
+4. **The SDK reads only `NP_TRACE_*` environment variables.** All config can be
+   passed explicitly to `np_trace_init`. Never expect it to read
+   `NULLPLATFORM_API_KEY`.
+5. **Tracing never breaks the caller.** Every function returns 0. Do not write
+   `|| true`, `if np_trace_...`, or error handling around SDK calls — there is
+   no failure to handle, and such code implies one exists.
+6. **Open the run at the TOP of the operation**, before the work — so a failure
+   is a real `failed` run carrying `tracing.error`, not a silent gap. Never open
+   a run after the work and emit retroactive "marker" steps; that is fabricated
+   instrumentation, not tracing.
+
+---
+
+## Setup
+
+```sh
+. ./nptrace.sh
+np_trace_init --producer "github-actions@1" --api-key "$NP_KEY"
+```
+
+`np_trace_init` flags: `--producer` (required when enabled), `--api-key` OR
+`--token`, `--base-url`, `--auth-url`, `--nrn`, `--enabled 0|1`, `--no-trap`.
+Each falls back to the matching `NP_TRACE_*` variable. It makes **no network
+call** — the token is fetched lazily at first flush.
+
+---
+
+## 30-second model
+
+- **Nodes**: `run` (a unit of work, has a lifecycle) and `step` (a *keyed* run —
+  a stage within a run). `dataset` and `job` exist in the wire contract but are
+  Phase 2 here.
+- A step's `run_id` is DERIVED: `parent~key@attempt.iteration`. Nesting a step
+  under a step produces `root~outer@0.0~inner@0.0`. You never construct these.
+- **Labels** = small queryable key/value. **Facets** = typed structured bodies
+  under `tracing.*`, set through the typed setters.
+
+---
+
+## Lifecycle
+
+```sh
+run=$(np_trace_run --trace-id "$ID" --run-id "$ID")
+np_trace_labels entity=build action=publish "application.id=$APP_ID"
+np_trace_explain --title "Build checkout-api" --what "CI build from $SHA"
+
+step=$(np_trace_step "$run" compile)
+if ! make build; then
+  np_trace_fail "$step" "compile failed"   # cascades to open children
+  np_trace_fail "$run" "build failed"
+  exit 1
+fi
+np_trace_complete "$step"
+np_trace_complete "$run"
+```
+
+Terminals: `np_trace_complete`, `np_trace_fail <msg>`, `np_trace_skip [reason]`,
+`np_trace_cancel [reason]`, `np_trace_timeout`, `np_trace_end`. Non-terminal:
+`np_trace_waiting`.
+
+`np_trace_fail` **cascades** to still-open child steps. `np_trace_complete` does
+**not** — close steps explicitly on the happy path.
+
+`np_trace_step [handle] <key> [--attempt N] [--iteration N]` — re-running the
+same slot uses `--attempt`, which yields a distinct derived id. There is no
+retry edge for that case.
+
+**Lazy `started`.** Nothing goes on the wire when you open a node. `started` is
+emitted at the first event that must follow it — a terminal, a child open, an
+explicit `np_trace_start`, or flush. So context set right after opening lands on
+`started`, and an in-flight node is visible with its labels rather than as a
+bare id.
+
+---
+
+## Context setters
+
+`np_trace_labels [h] k=v ...` — values are plain strings; an empty value is
+omitted, never recorded as `"null"`.
+`np_trace_explain [h] --title T [--what W] [--why W] [--impact I] [--next N] [--severity ok|warn|error]`
+— the human narrative the UI leads with. `--title` is required. Keep `--what` to
+one clause; structured detail belongs in io (Phase 2), not in explain.
+`np_trace_error [h] --message M [--code C] [--stack-trace S]`
+`np_trace_timing [h] [--started-at T] [--ended-at T]` — timing is auto-stamped;
+set this only to override (e.g. backfilling historical runs).
+`np_trace_facet [h] <namespace> <json>` — your OWN namespace. Never a
+`tracing.*` one.
+`np_trace_schema [h] <url>`
+
+---
+
+## Identity helpers
+
+```sh
+ID=$(np_trace_key checkout-api build "$GITHUB_RUN_ID")   # joins with -, drops empties
+ID=$(np_trace_key application create "$(np_trace_occurrence)")  # repeatable op
+```
+
+A **repeatable** operation's `run_id` must end in a per-occurrence token —
+reusing a deterministic id folds the new occurrence into the prior run's row.
+Prefer a shared execution id (`$GITHUB_RUN_ID`, a queue MessageId) so every
+observer derives the same id; otherwise mint `np_trace_occurrence` (a UUIDv7).
+
+Identifier charset is `[A-Za-z0-9_.-]+` for `trace_id`, named `run_id`, and
+`key`. A value outside it is dropped and recorded, not emitted.
+
+---
+
+## Crossing CI steps
+
+State lives on disk, so handles survive process boundaries — but only if you
+carry the pointers:
+
+```sh
+echo "NP_TRACE_DIR=$NP_TRACE_DIR" >> "$GITHUB_ENV"
+echo "NP_TRACE_CURRENT=$run"      >> "$GITHUB_ENV"
+```
+
+---
+
+## Delivery
+
+Emits are local file writes; nothing touches the network until flush. An `EXIT`
+trap flushes automatically (disable with `--no-trap`). `np_trace_flush` drains
+explicitly, `np_trace_shutdown` drains and cleans up, `np_trace_recover`
+re-delivers a crashed job's leftovers (idempotent — the spool file name is the
+event id, so a re-POST is a `200 duplicate`).
+
+Flush is bounded by `NP_TRACE_FLUSH_TIMEOUT` (10s). A dead API leaves events on
+disk and exits 0 rather than hanging the job.
+
+---
+
+## ❌ Anti-patterns
+
+| ❌ Do NOT write | ✅ Current |
+|---|---|
+| `np_trace_run ... \|\| true` | every function returns 0; no guard needed |
+| `if np_trace_complete "$run"; then` | it always succeeds; nothing to branch on |
+| `set +e` around SDK calls | the SDK is safe under `set -eu` |
+| `np_trace_step "$run" "my step"` | keys are `[A-Za-z0-9_.-]+` — `my-step` |
+| `np_trace_run --run-id "$ENTITY_ID"` | identity is the OPERATION; the entity is a label |
+| `np_trace_facet "$run" tracing.plan '...'` | `tracing.*` is reserved; use your own namespace |
+| `np_trace_labels "app.id=$id" \|\| echo fail` | drops are recorded internally, not returned |
+| opening the run after the work | open at the TOP, so failures are captured |
+| `np_trace_produces` / `np_trace_actor` / `np_trace_inject` | Phase 2 — not implemented yet |
+| `nptrace.sh step build` (subcommand) | Phase 2 — source the file and call functions |
+
+---
+
+## Not yet implemented (Phase 2)
+
+Do not generate: `np_trace_actor`, `np_trace_external_links`,
+`np_trace_affordances`, `np_trace_progress`, `np_trace_engine_status`,
+`np_trace_dropped`, `np_trace_plan`, `np_trace_decision`, `np_trace_retry`,
+`np_trace_signal`; the edge functions (`np_trace_triggered_by`,
+`np_trace_retry_of`, `np_trace_continues`, `np_trace_correlates`,
+`np_trace_instance_of`, `np_trace_compensates`, `np_trace_produces`,
+`np_trace_consumes`, `np_trace_link`); the io builders (`np_trace_input`,
+`np_trace_output`, and the ref/pointer variants); the ref constructors
+(`np_trace_run_ref`, `np_trace_step_ref`, `np_trace_dataset_ref`,
+`np_trace_job_ref`); propagation (`np_trace_inject`, `np_trace_extract`);
+`np_trace_dataset`, `np_trace_job`; and the subcommand CLI mode.
