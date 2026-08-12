@@ -1222,11 +1222,15 @@ np_trace_error() {
   _er_msg=''
   _er_code=''
   _er_stack=''
+  _er_details=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --message) _er_msg=${2:-}; shift 2 ;;
       --code) _er_code=${2:-}; shift 2 ;;
       --stack-trace) _er_stack=${2:-}; shift 2 ;;
+      # A JSON object with the diagnosis's structured evidence (counts, the
+      # failing probe, ...) — the sibling SDKs' error `details`.
+      --details) _er_details=${2:-}; shift 2 ;;
       *)
         if [ -z "$_er_msg" ]; then
           _er_msg=$1
@@ -1236,8 +1240,16 @@ np_trace_error() {
     esac
   done
   [ -n "$_er_msg" ] || return 0
+  case "$_er_details" in
+    '' | \{*) ;;
+    *) _er_details='' ;;
+  esac
   np__stage_facet "$_er_h" "$NP_FACET_ERROR" \
-    "$(np__json_obj message "$_er_msg" code "$_er_code" stack_trace "$_er_stack")"
+    "$(np__json_obj_raw \
+        message "$(np__json_str "$_er_msg")" \
+        code "$(if [ -n "$_er_code" ]; then np__json_str "$_er_code"; fi)" \
+        stack_trace "$(if [ -n "$_er_stack" ]; then np__json_str "$_er_stack"; fi)" \
+        details "$_er_details")"
   np__flush_foreign "$_er_h"
   return 0
 }
@@ -1281,6 +1293,78 @@ np__dataset_ref() {
   np__json_obj type dataset id "$1"
 }
 
+# Append one io descriptor to a direction's list; the facet is re-staged
+# whole each time (last write wins per namespace), so the array only ever
+# grows. $1 handle, $2 facet namespace, $3 descriptor store key, $4 the
+# already-formed descriptor JSON.
+np__append_io_descriptor() {
+  _ai_descriptors=$(np__node_get "$1" "$3")
+  if [ -n "$_ai_descriptors" ]; then
+    _ai_descriptors="$_ai_descriptors,$4"
+  else
+    _ai_descriptors=$4
+  fi
+  np__node_set "$1" "$3" "$_ai_descriptors"
+  np__stage_facet "$1" "$2" "[$_ai_descriptors]"
+  return 0
+}
+
+# The shared body of np_trace_output / np_trace_input: an INLINE io
+# descriptor — a small value carried in the event itself, the sibling SDKs'
+# step.output(name, value). $1 direction (out|in), $2 verb name for drop
+# records, then the caller's argv: [handle] <name> <json-value>.
+np__inline_io() {
+  _ii_direction=$1
+  _ii_verb=$2
+  shift 2
+  _ii_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_ii_handle" || { np__drop "$_ii_verb" 'no node in scope'; return 0; }
+  _ii_name=${1:-}
+  _ii_value=${2:-}
+  if [ -z "$_ii_name" ] || [ -z "$_ii_value" ]; then
+    np__drop "$_ii_verb" 'name and a JSON value are required'
+    return 0
+  fi
+  case "$_ii_value" in
+    \{* | \[* | \"* | [0-9-]* | true | false | null) ;;
+    *) np__drop "$_ii_verb" 'value must be JSON'; return 0 ;;
+  esac
+  if [ "$_ii_direction" = 'out' ]; then
+    _ii_facet_namespace=$NP_FACET_OUTPUT
+    _ii_store=io_output
+  else
+    _ii_facet_namespace=$NP_FACET_INPUT
+    _ii_store=io_input
+  fi
+  _ii_descriptor=$(np__json_obj_raw kind '"inline"' name "$(np__json_str "$_ii_name")" value "$_ii_value")
+  np__append_io_descriptor "$_ii_handle" "$_ii_facet_namespace" "$_ii_store" "$_ii_descriptor"
+  np__flush_foreign "$_ii_handle"
+  return 0
+}
+
+# np_trace_output [handle] <name> <json-value>
+#
+# Record what this node PRODUCED as an inline value carried in the event —
+# `np_trace_output instances '{"healthy":2,"desired":3}'`. For an artifact
+# with an address, prefer np_trace_produces (pointer + lineage edge).
+np_trace_output() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  np__inline_io out output "$@"
+  return 0
+}
+
+# np_trace_input [handle] <name> <json-value>
+#
+# Record what this node CONSUMED as an inline value; see np_trace_output.
+np_trace_input() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  np__inline_io in input "$@"
+  return 0
+}
+
 # np__emit_io_edge <handle> <direction> <dataset-id> [pointer-name] [pointer-uri]
 #
 # Emit one lineage edge. The direction decides everything else: `out` is
@@ -1314,16 +1398,7 @@ np__emit_io_edge() {
   _io_pointer=''
   if [ -n "$_io_pointer_name" ] && [ -n "$_io_pointer_uri" ]; then
     _io_pointer=$(np__json_obj kind pointer name "$_io_pointer_name" uri "$_io_pointer_uri")
-    # Append to the direction's descriptor list; the facet is re-staged whole
-    # each time (last write wins per namespace), so the array only ever grows.
-    _io_descriptors=$(np__node_get "$_io_handle" "$_io_descriptor_store")
-    if [ -n "$_io_descriptors" ]; then
-      _io_descriptors="$_io_descriptors,$_io_pointer"
-    else
-      _io_descriptors=$_io_pointer
-    fi
-    np__node_set "$_io_handle" "$_io_descriptor_store" "$_io_descriptors"
-    np__stage_facet "$_io_handle" "$_io_facet_namespace" "[$_io_descriptors]"
+    np__append_io_descriptor "$_io_handle" "$_io_facet_namespace" "$_io_descriptor_store" "$_io_pointer"
   fi
 
   # An edge must not point FROM a node the read model has never seen.
