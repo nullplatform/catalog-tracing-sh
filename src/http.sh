@@ -60,34 +60,34 @@ np__token_exchange() {
     return 0
   fi
 
-  _tk_cache="$NP_TRACE_DIR/token"
-  if [ -f "$_tk_cache" ]; then
-    _tk_exp=$(sed -n '1p' "$_tk_cache" 2>/dev/null)
-    _tk_val=$(sed -n '2p' "$_tk_cache" 2>/dev/null)
-    case "$_tk_exp" in
-      '' | *[!0-9]*) _tk_exp=0 ;;
+  _token_exchange_cache="$NP_TRACE_DIR/token"
+  if [ -f "$_token_exchange_cache" ]; then
+    _token_exchange_exp=$(sed -n '1p' "$_token_exchange_cache" 2>/dev/null)
+    _token_exchange_val=$(sed -n '2p' "$_token_exchange_cache" 2>/dev/null)
+    case "$_token_exchange_exp" in
+      '' | *[!0-9]*) _token_exchange_exp=0 ;;
     esac
-    if [ -n "$_tk_val" ] && [ "$_tk_exp" -gt "$(date +%s)" ]; then
-      printf '%s' "$_tk_val"
+    if [ -n "$_token_exchange_val" ] && [ "$_token_exchange_exp" -gt "$(date +%s)" ]; then
+      printf '%s' "$_token_exchange_val"
       return 0
     fi
   fi
 
-  _tk_body=$(curl -sS -X POST \
+  _token_exchange_body=$(curl -sS -X POST \
     --connect-timeout "$NP_TRACE_CONNECT_TIMEOUT" --max-time "$NP_TRACE_MAX_TIME" \
     -H 'Content-Type: application/json' \
     -d "$(np__json_obj apiKey "$NP_TRACE_API_KEY")" \
-    "${NP_TRACE_AUTH_URL:-$NP_TRACE_DEFAULT_AUTH_URL}/token" 2>/dev/null) || _tk_body=''
+    "${NP_TRACE_AUTH_URL:-$NP_TRACE_DEFAULT_AUTH_URL}/token" 2>/dev/null) || _token_exchange_body=''
 
-  _tk_new=$(printf '%s' "$_tk_body" |
+  _token_exchange_new=$(printf '%s' "$_token_exchange_body" |
     sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-  if [ -z "$_tk_new" ]; then
+  if [ -z "$_token_exchange_new" ]; then
     np__drop 'auth' 'token exchange failed'
     printf ''
     return 0
   fi
-  ( umask 077; printf '%s\n%s\n' "$(( $(date +%s) + 3540 ))" "$_tk_new" > "$_tk_cache" )
-  printf '%s' "$_tk_new"
+  ( umask 077; printf '%s\n%s\n' "$(( $(date +%s) + 3540 ))" "$_token_exchange_new" > "$_token_exchange_cache" )
+  printf '%s' "$_token_exchange_new"
   return 0
 }
 
@@ -96,26 +96,26 @@ np__token_exchange() {
 # straight into the build log.
 np__auth_config() {
   np__secret_begin
-  _ac_file="$NP_TRACE_DIR/curlcfg.$$"
-  ( umask 077; printf 'header = "Authorization: Bearer %s"\n' "$(np__token)" > "$_ac_file" )
+  _auth_config_file="$NP_TRACE_DIR/curlcfg.$$"
+  ( umask 077; printf 'header = "Authorization: Bearer %s"\n' "$(np__token)" > "$_auth_config_file" )
   np__secret_end
-  printf '%s' "$_ac_file"
+  printf '%s' "$_auth_config_file"
   return 0
 }
 
 # POST one spool file. Prints the HTTP status code, or 000 on a network failure.
 np__post_event() {
-  _pe_cfg=$(np__auth_config)
-  _pe_code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-    --config "$_pe_cfg" \
+  _post_event_cfg=$(np__auth_config)
+  _post_event_code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+    --config "$_post_event_cfg" \
     --connect-timeout "$NP_TRACE_CONNECT_TIMEOUT" --max-time "$NP_TRACE_MAX_TIME" \
     -H 'Content-Type: application/json' \
     --data-binary "@$1" \
-    "${NP_TRACE_BASE_URL:-$NP_TRACE_DEFAULT_BASE_URL}/events" 2>/dev/null) || _pe_code='000'
-  rm -f "$_pe_cfg" 2>/dev/null || :
-  case "$_pe_code" in
-    '' | *[!0-9]*) _pe_code='000' ;;
+    "${NP_TRACE_BASE_URL:-$NP_TRACE_DEFAULT_BASE_URL}/events" 2>/dev/null) || _post_event_code='000'
+  rm -f "$_post_event_cfg" 2>/dev/null || :
+  case "$_post_event_code" in
+    '' | *[!0-9]*) _post_event_code='000' ;;
   esac
-  printf '%s' "$_pe_code"
+  printf '%s' "$_post_event_code"
   return 0
 }
