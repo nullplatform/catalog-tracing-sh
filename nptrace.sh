@@ -1437,13 +1437,13 @@ np_trace_progress() {
   _pg_current=${1:-}
   _pg_target=${2:-}
   _pg_unit=${3:-}
-  case "$_pg_current$_pg_target" in
-    '' | *[!0-9]*) np__drop 'progress' 'current and target must be non-negative integers'; return 0 ;;
-  esac
-  [ -n "$_pg_current" ] && [ -n "$_pg_target" ] || {
+  if [ -z "$_pg_current" ] || [ -z "$_pg_target" ]; then
     np__drop 'progress' 'current and target must be non-negative integers'
     return 0
-  }
+  fi
+  case "$_pg_current$_pg_target" in
+    *[!0-9]*) np__drop 'progress' 'current and target must be non-negative integers'; return 0 ;;
+  esac
   np__stage_facet "$_pg_h" "$NP_FACET_PROGRESS" \
     "$(np__json_obj_raw current "$_pg_current" target "$_pg_target" \
         unit "$(if [ -n "$_pg_unit" ]; then np__json_str "$_pg_unit"; fi)")"

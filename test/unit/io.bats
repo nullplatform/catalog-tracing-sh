@@ -70,15 +70,18 @@ load '../helper'
   assert_out_match '*"tracing.output":\[{"kind":"pointer","name":"service","uri":"ns/svc"},{"kind":"pointer","name":"ingress","uri":"ns/ing"}\]*'
 }
 
-@test "an edge never points from a node the read model has not seen" {
+@test "an io edge forces the from-node's lazy started" {
+  # Spool filename order is not asserted (busybox UUIDv7s have second
+  # granularity, so same-second files sort arbitrarily); the invariant is that
+  # the produces call flushes the lazy `started` at all — the read model must
+  # know the node the edge points from.
   np_sh_state '
     run=$(np_trace_run --trace-id tr1 --run-id tr1)
     np_trace_produces "$run" "report:tr1"
     wire
   '
-  # started precedes the edge in the spool
-  first=$(printf "%s" "$output" | grep -o "edge.produces\|\"status\":\"started\"" | head -1)
-  [ "$first" = '"status":"started"' ]
+  assert_out_match '*"status":"started"*'
+  assert_out_match '*"edge.produces"*'
 }
 
 @test "a missing dataset id is a drop, never an edge" {
