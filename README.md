@@ -18,10 +18,10 @@ Runnable examples: [`examples/`](./examples/) — start with [`01-quickstart.sh`
 
 **Using an AI coding assistant?** [`llms.txt`](./llms.txt) is a dense, agent-optimized usage guide (rules, full surface, and an anti-patterns table covering what is not implemented yet).
 
-> **Phase 1.** Lifecycle, labels, explain, error, timing and custom facets are
-> implemented and verified end to end. Edges, io builders, propagation, the
-> remaining core-facet setters and the subcommand CLI mode are Phase 2 — see
-> [Not yet implemented](#not-yet-implemented).
+> The full producer surface of the sibling SDKs is implemented — lifecycle,
+> context, io (inline/ref/pointer), lineage, relations, definitions and every
+> core facet — verified end to end. The subcommand CLI mode is the one
+> remaining piece — see [Not yet implemented](#not-yet-implemented).
 
 ## Quick start
 
@@ -326,13 +326,11 @@ plan-progress arrives with Phase 2.
 
 ## Not yet implemented
 
-Phase 2: the remaining core-facet setters (`actor`, `external_links`,
-`engine_status`, `dropped`, `plan`, `decision`,
-`retry`, `signal`); the remaining edge functions (`triggered_by`, `retry_of`,
-`continues`, `correlates`, `instance_of`, `compensates`,
-`link`); the remaining io builder variants (inline ships as `output`/`input`,
-pointer via `--name`/`--uri` on `produces`/`consumes`); the ref constructors; `dataset`
-and `job` nodes; and the subcommand CLI mode.
+The subcommand CLI mode (`nptrace.sh step build ...`) — source the file and
+call functions instead. The rest of the sibling SDKs' producer surface is
+implemented; the one deliberate boundary is the bearer-JWT form of the actor
+setter (JWT decoding needs base64, which the zero-dependency toolset
+excludes) — pass the identity to `np_trace_actor` explicitly.
 
 ## Wire contract version
 

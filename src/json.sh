@@ -85,3 +85,24 @@ np__json_obj_raw() {
   done
   printf '{%s}' "$_jor_out"
 }
+
+# A JSON array of strings from a comma-separated list ("a, b" → ["a","b"]).
+# Surrounding whitespace per item is trimmed; empty items are omitted.
+np__json_str_array_csv() {
+  _ja_out=''
+  _ja_rest=$1
+  while [ -n "$_ja_rest" ]; do
+    case "$_ja_rest" in
+      *,*) _ja_item=${_ja_rest%%,*}; _ja_rest=${_ja_rest#*,} ;;
+      *) _ja_item=$_ja_rest; _ja_rest='' ;;
+    esac
+    _ja_item=$(printf '%s' "$_ja_item" | sed 's/^ *//; s/ *$//')
+    if [ -n "$_ja_item" ]; then
+      if [ -n "$_ja_out" ]; then
+        _ja_out="$_ja_out,"
+      fi
+      _ja_out="$_ja_out$(np__json_str "$_ja_item")"
+    fi
+  done
+  printf '[%s]' "$_ja_out"
+}

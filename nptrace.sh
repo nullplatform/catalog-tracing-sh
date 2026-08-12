@@ -143,6 +143,27 @@ np__json_obj_raw() {
   printf '{%s}' "$_jor_out"
 }
 
+# A JSON array of strings from a comma-separated list ("a, b" → ["a","b"]).
+# Surrounding whitespace per item is trimmed; empty items are omitted.
+np__json_str_array_csv() {
+  _ja_out=''
+  _ja_rest=$1
+  while [ -n "$_ja_rest" ]; do
+    case "$_ja_rest" in
+      *,*) _ja_item=${_ja_rest%%,*}; _ja_rest=${_ja_rest#*,} ;;
+      *) _ja_item=$_ja_rest; _ja_rest='' ;;
+    esac
+    _ja_item=$(printf '%s' "$_ja_item" | sed 's/^ *//; s/ *$//')
+    if [ -n "$_ja_item" ]; then
+      if [ -n "$_ja_out" ]; then
+        _ja_out="$_ja_out,"
+      fi
+      _ja_out="$_ja_out$(np__json_str "$_ja_item")"
+    fi
+  done
+  printf '[%s]' "$_ja_out"
+}
+
 # ---- src/uuid.sh ----
 # uuid.sh — UUIDv7. The event id MUST be a v7: the API derives the storage
 # partition from its embedded millisecond timestamp and rejects anything else.
@@ -1309,11 +1330,52 @@ np__append_io_descriptor() {
   return 0
 }
 
-# The shared body of np_trace_output / np_trace_input: an INLINE io
-# descriptor — a small value carried in the event itself, the sibling SDKs'
-# step.output(name, value). $1 direction (out|in), $2 verb name for drop
-# records, then the caller's argv: [handle] <name> <json-value>.
-np__inline_io() {
+# Build one io descriptor from its parsed parts, choosing the kind by which
+# parts are present: a uri is a POINTER (large data referenced, not inlined),
+# a source+external-id is a REF (an entity in an external catalog), a JSON
+# value is INLINE (carried in the event itself). Prints the descriptor, or
+# nothing (with a drop) when the parts don't form one.
+# $1 verb (for drop records), $2 name, $3 inline JSON, $4 uri, $5 ref source,
+# $6 ref external id, $7 ref version.
+np__io_descriptor() {
+  _dv_verb=$1
+  _dv_name=$2
+  _dv_inline=$3
+  _dv_uri=$4
+  _dv_ref_source=$5
+  _dv_ref_id=$6
+  _dv_ref_version=$7
+  if [ -z "$_dv_name" ]; then
+    np__drop "$_dv_verb" 'a descriptor name is required'
+    return 1
+  fi
+  if [ -n "$_dv_uri" ]; then
+    np__json_obj kind pointer name "$_dv_name" uri "$_dv_uri"
+    return 0
+  fi
+  if [ -n "$_dv_ref_source" ] && [ -n "$_dv_ref_id" ]; then
+    np__json_obj kind ref name "$_dv_name" source "$_dv_ref_source" \
+      external_id "$_dv_ref_id" version "$_dv_ref_version"
+    return 0
+  fi
+  if [ -n "$_dv_inline" ]; then
+    case "$_dv_inline" in
+      \{* | \[* | \"* | [0-9-]* | true | false | null)
+        np__json_obj_raw kind '"inline"' name "$(np__json_str "$_dv_name")" value "$_dv_inline"
+        return 0
+        ;;
+    esac
+    np__drop "$_dv_verb" 'value must be JSON'
+    return 1
+  fi
+  np__drop "$_dv_verb" 'a JSON value, --uri, or --source + --external-id is required'
+  return 1
+}
+
+# The shared body of np_trace_output / np_trace_input.
+# $1 direction (out|in), $2 verb, then the caller's argv:
+#   [handle] <name> [<json-value>] [--uri U] [--source S --external-id E [--version V]]
+np__record_io() {
   _ii_direction=$1
   _ii_verb=$2
   shift 2
@@ -1323,57 +1385,69 @@ np__inline_io() {
   fi
   np__is_handle "$_ii_handle" || { np__drop "$_ii_verb" 'no node in scope'; return 0; }
   _ii_name=${1:-}
-  _ii_value=${2:-}
-  if [ -z "$_ii_name" ] || [ -z "$_ii_value" ]; then
-    np__drop "$_ii_verb" 'name and a JSON value are required'
-    return 0
+  if [ "$#" -gt 0 ]; then
+    shift
   fi
-  case "$_ii_value" in
-    \{* | \[* | \"* | [0-9-]* | true | false | null) ;;
-    *) np__drop "$_ii_verb" 'value must be JSON'; return 0 ;;
-  esac
+  _ii_inline=''
+  _ii_uri=''
+  _ii_ref_source=''
+  _ii_ref_id=''
+  _ii_ref_version=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --uri) _ii_uri=${2:-}; shift 2 ;;
+      --source) _ii_ref_source=${2:-}; shift 2 ;;
+      --external-id) _ii_ref_id=${2:-}; shift 2 ;;
+      --version) _ii_ref_version=${2:-}; shift 2 ;;
+      *)
+        if [ -z "$_ii_inline" ]; then
+          _ii_inline=$1
+        fi
+        shift
+        ;;
+    esac
+  done
+  _ii_descriptor=$(np__io_descriptor "$_ii_verb" "$_ii_name" "$_ii_inline" \
+    "$_ii_uri" "$_ii_ref_source" "$_ii_ref_id" "$_ii_ref_version") || return 0
   if [ "$_ii_direction" = 'out' ]; then
-    _ii_facet_namespace=$NP_FACET_OUTPUT
-    _ii_store=io_output
+    np__append_io_descriptor "$_ii_handle" "$NP_FACET_OUTPUT" io_output "$_ii_descriptor"
   else
-    _ii_facet_namespace=$NP_FACET_INPUT
-    _ii_store=io_input
+    np__append_io_descriptor "$_ii_handle" "$NP_FACET_INPUT" io_input "$_ii_descriptor"
   fi
-  _ii_descriptor=$(np__json_obj_raw kind '"inline"' name "$(np__json_str "$_ii_name")" value "$_ii_value")
-  np__append_io_descriptor "$_ii_handle" "$_ii_facet_namespace" "$_ii_store" "$_ii_descriptor"
   np__flush_foreign "$_ii_handle"
   return 0
 }
 
-# np_trace_output [handle] <name> <json-value>
+# np_trace_output [handle] <name> [<json-value>] [--uri U] [--source S --external-id E [--version V]]
 #
-# Record what this node PRODUCED as an inline value carried in the event —
-# `np_trace_output instances '{"healthy":2,"desired":3}'`. For an artifact
-# with an address, prefer np_trace_produces (pointer + lineage edge).
+# Record what this node PRODUCED: an inline value carried in the event
+# (`np_trace_output instances '{"healthy":2}'`), a pointer to large data
+# (`--uri`), or a ref to an external catalog entity (`--source`/`--external-id`).
+# For an artifact that should ALSO join the lineage graph, prefer
+# np_trace_produces (descriptor + edge in one call).
 np_trace_output() {
   [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
-  np__inline_io out output "$@"
+  np__record_io out output "$@"
   return 0
 }
 
-# np_trace_input [handle] <name> <json-value>
+# np_trace_input [handle] <name> [<json-value>] [--uri U] [--source S --external-id E [--version V]]
 #
-# Record what this node CONSUMED as an inline value; see np_trace_output.
+# Record what this node CONSUMED; see np_trace_output.
 np_trace_input() {
   [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
-  np__inline_io in input "$@"
+  np__record_io in input "$@"
   return 0
 }
 
-# np__emit_io_edge <handle> <direction> <dataset-id> [pointer-name] [pointer-uri]
+# np__emit_io_edge <handle> <direction> <dataset-id> [descriptor-json]
 #
 # Emit one lineage edge. The direction decides everything else: `out` is
 # edge.produces + tracing.output, `in` is edge.consumes + tracing.input.
 #
-# With a pointer (name + uri) the io is declared ONCE: the descriptor
-# accumulates into the node's io facet AND becomes the edge's tracing.binding
-# — the same single-source rule as the sibling SDKs. Without one, the edge
-# records lineage only.
+# With a descriptor the io is declared ONCE: it accumulates into the node's
+# io facet AND becomes the edge's tracing.binding — the same single-source
+# rule as the sibling SDKs. Without one, the edge records lineage only.
 #
 # On a FOREIGN (adopted) node this is an observed fact, exactly like
 # np_trace_error: the edge is ours to say, and the staged io facet reaches the
@@ -1382,8 +1456,6 @@ np__emit_io_edge() {
   _io_handle=$1
   _io_direction=$2
   _io_dataset_id=$3
-  _io_pointer_name=${4:-}
-  _io_pointer_uri=${5:-}
 
   if [ "$_io_direction" = 'out' ]; then
     _io_edge_type=$NP_TYPE_EDGE_PRODUCES
@@ -1395,20 +1467,20 @@ np__emit_io_edge() {
     _io_descriptor_store=io_input
   fi
 
-  _io_pointer=''
-  if [ -n "$_io_pointer_name" ] && [ -n "$_io_pointer_uri" ]; then
-    _io_pointer=$(np__json_obj kind pointer name "$_io_pointer_name" uri "$_io_pointer_uri")
-    np__append_io_descriptor "$_io_handle" "$_io_facet_namespace" "$_io_descriptor_store" "$_io_pointer"
+  _io_binding=$4
+
+  if [ -n "$_io_binding" ]; then
+    np__append_io_descriptor "$_io_handle" "$_io_facet_namespace" "$_io_descriptor_store" "$_io_binding"
   fi
 
   # An edge must not point FROM a node the read model has never seen.
   np_trace_start "$_io_handle"
 
-  if [ -n "$_io_pointer" ]; then
+  if [ -n "$_io_binding" ]; then
     _io_edge_data=$(np__json_obj_raw \
       from "$(np__ref_of "$_io_handle")" \
       to "$(np__dataset_ref "$_io_dataset_id")" \
-      facets "{$(np__json_str "$NP_FACET_BINDING"):$_io_pointer}")
+      facets "{$(np__json_str "$NP_FACET_BINDING"):$_io_binding}")
   else
     _io_edge_data=$(np__json_obj_raw \
       from "$(np__ref_of "$_io_handle")" \
@@ -1444,35 +1516,544 @@ np__lineage_verb() {
     return 0
   fi
 
-  _lv_pointer_name=''
-  _lv_pointer_uri=''
+  _lv_name=''
+  _lv_inline=''
+  _lv_uri=''
+  _lv_ref_source=''
+  _lv_ref_id=''
+  _lv_ref_version=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --name) _lv_pointer_name=${2:-}; shift 2 ;;
-      --uri) _lv_pointer_uri=${2:-}; shift 2 ;;
+      --name) _lv_name=${2:-}; shift 2 ;;
+      --uri) _lv_uri=${2:-}; shift 2 ;;
+      --value) _lv_inline=${2:-}; shift 2 ;;
+      --source) _lv_ref_source=${2:-}; shift 2 ;;
+      --external-id) _lv_ref_id=${2:-}; shift 2 ;;
+      --version) _lv_ref_version=${2:-}; shift 2 ;;
       *) shift ;;
     esac
   done
 
-  np__emit_io_edge "$_lv_handle" "$_lv_direction" "$_lv_dataset_id" \
-    "$_lv_pointer_name" "$_lv_pointer_uri"
+  _lv_binding=''
+  if [ -n "$_lv_name" ]; then
+    _lv_binding=$(np__io_descriptor "$_lv_verb" "$_lv_name" "$_lv_inline" \
+      "$_lv_uri" "$_lv_ref_source" "$_lv_ref_id" "$_lv_ref_version") || return 0
+  fi
+
+  np__emit_io_edge "$_lv_handle" "$_lv_direction" "$_lv_dataset_id" "$_lv_binding"
   return 0
 }
 
-# np_trace_produces [handle] <dataset-id> [--name <n> --uri <locator>]
+# np_trace_produces [handle] <dataset-id> [--name <n> (--uri U | --value JSON | --source S --external-id E [--version V])]
 #
-# Declare this node WROTE the dataset. `--name`/`--uri` record the io as a
-# pointer descriptor (the artifact's address) on both the node and the edge.
+# Declare this node WROTE the dataset. With `--name` the io is declared once
+# — a pointer (`--uri`, the artifact's address), an inline value (`--value`),
+# or a catalog ref (`--source`/`--external-id`) — on both the node and the
+# edge's binding. Bare form records lineage only.
 np_trace_produces() {
   np__lineage_verb out produces "$@"
   return 0
 }
 
-# np_trace_consumes [handle] <dataset-id> [--name <n> --uri <locator>]
+# np_trace_consumes [handle] <dataset-id> [--name <n> (--uri U | --value JSON | --source S --external-id E [--version V])]
 #
 # Declare this node READ the dataset; see np_trace_produces.
 np_trace_consumes() {
   np__lineage_verb in consumes "$@"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Run-to-run edges — how operations relate across the graph
+# ---------------------------------------------------------------------------
+
+# Resolve an edge target: a handle from this process, or a PACKED CARRIER
+# ("1|<trace_id>|<run_id>") — the natural address in shell, where the other
+# end of an edge usually arrived via an env var. Prints the target's ref.
+np__edge_target_ref() {
+  if np__is_handle "$1"; then
+    np__ref_of "$1"
+    return 0
+  fi
+  _et_context=$(np_trace_extract "$1") || return 1
+  _et_trace=${_et_context%% *}
+  _et_run=${_et_context#* }
+  np__json_obj type run trace_id "$_et_trace" run_id "$_et_run"
+  return 0
+}
+
+# Emit one relationship edge from a node this process holds.
+# $1 handle, $2 edge type, $3 target ref JSON, $4 verb for drop records.
+np__emit_ref_edge() {
+  _re_from=$(np__ref_of "$1")
+  if [ "$_re_from" = "$3" ]; then
+    np__drop "$4" 'self-edge forbidden'
+    return 0
+  fi
+  # An edge must not point FROM a node the read model has never seen.
+  np_trace_start "$1"
+  _re_data=$(np__json_obj_raw from "$_re_from" to "$3")
+  np__spool "$2" "$(np__node_get "$1" nrn)" "$_re_data" >/dev/null
+  np__flush_foreign "$1"
+  return 0
+}
+
+# The shared argv handling of the run-to-run edge verbs.
+# $1 edge type, $2 verb, then the caller's argv: [handle] <target>.
+np__relation_verb() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  _rv_type=$1
+  _rv_verb=$2
+  shift 2
+  _rv_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_rv_handle" || { np__drop "$_rv_verb" 'no node in scope'; return 0; }
+  if [ -z "${1:-}" ]; then
+    np__drop "$_rv_verb" 'a target (handle or packed carrier) is required'
+    return 0
+  fi
+  _rv_target=$(np__edge_target_ref "$1") || {
+    np__drop "$_rv_verb" 'target is not a handle or a valid carrier'
+    return 0
+  }
+  np__emit_ref_edge "$_rv_handle" "$_rv_type" "$_rv_target" "$_rv_verb"
+  return 0
+}
+
+# np_trace_triggered_by [handle] <target>
+#
+# The operation that CAUSED this one — a cross-trace fact (the target is
+# usually another trace's run, addressed by its packed carrier).
+np_trace_triggered_by() {
+  np__relation_verb "$NP_TYPE_EDGE_TRIGGERED_BY" triggered_by "$@"
+  return 0
+}
+
+# np_trace_retry_of [handle] <target> — this run retries that one.
+np_trace_retry_of() {
+  np__relation_verb "$NP_TYPE_EDGE_RETRY_OF" retry_of "$@"
+  return 0
+}
+
+# np_trace_continues [handle] <target> — this run resumes that one's work.
+np_trace_continues() {
+  np__relation_verb "$NP_TYPE_EDGE_CONTINUES" continues "$@"
+  return 0
+}
+
+# np_trace_correlates [handle] <target> — related, with no causal claim.
+np_trace_correlates() {
+  np__relation_verb "$NP_TYPE_EDGE_CORRELATES" correlates "$@"
+  return 0
+}
+
+# np_trace_compensates [handle] <target> — this run undoes that one's effect.
+np_trace_compensates() {
+  np__relation_verb "$NP_TYPE_EDGE_COMPENSATES" compensates "$@"
+  return 0
+}
+
+# np_trace_link [handle] <edge-type> <target>
+#
+# Escape hatch over the named verbs — emit any known edge type. Prefer the
+# named functions when one fits.
+np_trace_link() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  _lk_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_lk_handle" || { np__drop 'link' 'no node in scope'; return 0; }
+  _lk_type=${1:-}
+  case "$_lk_type" in
+    "$NP_TYPE_EDGE_TRIGGERED_BY" | "$NP_TYPE_EDGE_RETRY_OF" | "$NP_TYPE_EDGE_CONTINUES" \
+    | "$NP_TYPE_EDGE_CORRELATES" | "$NP_TYPE_EDGE_COMPENSATES" | "$NP_TYPE_EDGE_PARENT") ;;
+    *) np__drop 'link' "unknown edge type '${_lk_type}'"; return 0 ;;
+  esac
+  if [ -z "${2:-}" ]; then
+    np__drop 'link' 'a target (handle or packed carrier) is required'
+    return 0
+  fi
+  _lk_target=$(np__edge_target_ref "$2") || {
+    np__drop 'link' 'target is not a handle or a valid carrier'
+    return 0
+  }
+  np__emit_ref_edge "$_lk_handle" "$_lk_type" "$_lk_target" link
+  return 0
+}
+
+# np_trace_instance_of [handle] <namespace> <name> <version> [--nrn N]
+#
+# This run instantiates a reusable JOB definition — the read model resolves
+# the run's plan from the definition. Emit the definition itself with
+# np_trace_job.
+np_trace_instance_of() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  _if_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_if_handle" || { np__drop 'instance_of' 'no node in scope'; return 0; }
+  _if_namespace=${1:-}
+  _if_name=${2:-}
+  _if_version=${3:-}
+  if [ "$#" -ge 3 ]; then
+    shift 3
+  fi
+  _if_nrn=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --nrn) _if_nrn=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -z "$_if_namespace" ] || [ -z "$_if_name" ] || [ -z "$_if_version" ]; then
+    np__drop 'instance_of' 'namespace, name and version are required'
+    return 0
+  fi
+  _if_target=$(np__json_obj type job namespace "$_if_namespace" \
+    name "$_if_name" version "$_if_version" nrn "$_if_nrn")
+  np__emit_ref_edge "$_if_handle" "$NP_TYPE_EDGE_INSTANCE_OF" "$_if_target" instance_of
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Definition nodes — identities, not executions
+# ---------------------------------------------------------------------------
+
+# np_trace_dataset <id> [--nrn N]
+#
+# Emit a dataset node — an identity a lineage edge can point at. The id is
+# the CANONICAL address (see np_trace_produces); edges to an unemitted
+# dataset still resolve, so this is only needed to carry the node itself.
+np_trace_dataset() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  _dn_id=${1:-}
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
+  _dn_nrn=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --nrn) _dn_nrn=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -z "$_dn_id" ]; then
+    np__drop 'dataset' 'an id is required'
+    return 0
+  fi
+  np__spool "$NP_TYPE_NODE_DATASET" "$_dn_nrn" "$(np__json_obj id "$_dn_id")" >/dev/null
+  return 0
+}
+
+# np_trace_job <namespace> <name> <version> [--nrn N] [--plan JSON]
+#
+# Emit a job definition node — the reusable spec runs link instance_of, with
+# its expected step plan (previewable before any run exists).
+np_trace_job() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  _jb_namespace=${1:-}
+  _jb_name=${2:-}
+  _jb_version=${3:-}
+  if [ "$#" -ge 3 ]; then
+    shift 3
+  fi
+  _jb_nrn=''
+  _jb_plan=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --nrn) _jb_nrn=${2:-}; shift 2 ;;
+      --plan) _jb_plan=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -z "$_jb_namespace" ] || [ -z "$_jb_name" ] || [ -z "$_jb_version" ]; then
+    np__drop 'job' 'namespace, name and version are required'
+    return 0
+  fi
+  case "$_jb_plan" in
+    '' | \[*) ;;
+    *) np__drop 'job' 'the plan must be a JSON array of steps'; return 0 ;;
+  esac
+  if [ -n "$_jb_plan" ]; then
+    _jb_data=$(np__json_obj_raw \
+      namespace "$(np__json_str "$_jb_namespace")" \
+      name "$(np__json_str "$_jb_name")" \
+      version "$(np__json_str "$_jb_version")" \
+      facets "{$(np__json_str "$NP_FACET_PLAN"):$_jb_plan}")
+  else
+    _jb_data=$(np__json_obj namespace "$_jb_namespace" name "$_jb_name" version "$_jb_version")
+  fi
+  np__spool "$NP_TYPE_NODE_JOB" "$_jb_nrn" "$_jb_data" >/dev/null
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# The remaining core-facet setters
+# ---------------------------------------------------------------------------
+
+# np_trace_actor [handle] <user|service> <id> [--source S]
+#
+# WHO acted. The sibling SDKs also accept a bearer JWT and decode it; that
+# sugar needs base64, which this SDK's runtime toolset excludes — pass the
+# identity explicitly (the np CLI stamps the actor on workflow runs already).
+np_trace_actor() {
+  _ac_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_ac_handle" || return 0
+  _ac_kind=${1:-}
+  _ac_id=${2:-}
+  if [ "$#" -ge 2 ]; then
+    shift 2
+  fi
+  _ac_source=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --source) _ac_source=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$_ac_kind" in
+    user | service) ;;
+    *) np__drop 'actor' "kind must be user or service, got '${_ac_kind}'"; return 0 ;;
+  esac
+  if [ -z "$_ac_id" ]; then
+    np__drop 'actor' 'an id is required'
+    return 0
+  fi
+  np__stage_facet "$_ac_handle" "$NP_FACET_ACTOR" \
+    "$(np__json_obj kind "$_ac_kind" id "$_ac_id" source "$_ac_source")"
+  np__flush_foreign "$_ac_handle"
+  return 0
+}
+
+# np_trace_decision [handle] <chosen[,chosen...]> [--available a,b,c] [--expression E]
+#
+# The branch(es) this node chose, with the option set and the human-readable
+# expression when known.
+np_trace_decision() {
+  _dc_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_dc_handle" || return 0
+  _dc_chosen=${1:-}
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
+  _dc_available=''
+  _dc_expression=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --available) _dc_available=${2:-}; shift 2 ;;
+      --expression) _dc_expression=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -z "$_dc_chosen" ]; then
+    np__drop 'decision' 'at least one chosen branch is required'
+    return 0
+  fi
+  np__stage_facet "$_dc_handle" "$NP_FACET_DECISION" \
+    "$(np__json_obj_raw \
+        chosen "$(np__json_str_array_csv "$_dc_chosen")" \
+        available "$(if [ -n "$_dc_available" ]; then np__json_str_array_csv "$_dc_available"; fi)" \
+        expression "$(if [ -n "$_dc_expression" ]; then np__json_str "$_dc_expression"; fi)")"
+  np__flush_foreign "$_dc_handle"
+  return 0
+}
+
+# np_trace_retry [handle] <attempt> [--next-attempt N] [--delay-ms MS]
+np_trace_retry() {
+  _rt_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_rt_handle" || return 0
+  _rt_attempt=${1:-}
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
+  _rt_next=''
+  _rt_delay=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --next-attempt) _rt_next=${2:-}; shift 2 ;;
+      --delay-ms) _rt_delay=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$_rt_attempt$_rt_next$_rt_delay" in
+    '' | *[!0-9]*) np__drop 'retry' 'attempt, next-attempt and delay-ms must be non-negative integers'; return 0 ;;
+  esac
+  np__stage_facet "$_rt_handle" "$NP_FACET_RETRY" \
+    "$(np__json_obj_raw attempt "$_rt_attempt" next_attempt "$_rt_next" delay_ms "$_rt_delay")"
+  np__flush_foreign "$_rt_handle"
+  return 0
+}
+
+# np_trace_signal [handle] <name> <wait|received> [--timeout-ms MS]
+np_trace_signal() {
+  _sg_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_sg_handle" || return 0
+  _sg_name=${1:-}
+  _sg_direction=${2:-}
+  if [ "$#" -ge 2 ]; then
+    shift 2
+  fi
+  _sg_timeout=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --timeout-ms) _sg_timeout=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -z "$_sg_name" ]; then
+    np__drop 'signal' 'a name is required'
+    return 0
+  fi
+  case "$_sg_direction" in
+    wait | received) ;;
+    *) np__drop 'signal' "direction must be wait or received, got '${_sg_direction}'"; return 0 ;;
+  esac
+  case "$_sg_timeout" in
+    '' | *[!0-9]*)
+      if [ -n "$_sg_timeout" ]; then
+        np__drop 'signal' 'timeout-ms must be a non-negative integer'
+        return 0
+      fi
+      ;;
+  esac
+  np__stage_facet "$_sg_handle" "$NP_FACET_SIGNAL" \
+    "$(np__json_obj_raw \
+        name "$(np__json_str "$_sg_name")" \
+        direction "$(np__json_str "$_sg_direction")" \
+        timeout_ms "$_sg_timeout")"
+  np__flush_foreign "$_sg_handle"
+  return 0
+}
+
+# np_trace_external_links [handle] <rel> <uri> [--label L]
+#
+# One off-platform link (a CI run, a dashboard). Accumulates: call once per
+# link, the facet is the array of everything declared so far.
+np_trace_external_links() {
+  _el_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_el_handle" || return 0
+  _el_rel=${1:-}
+  _el_uri=${2:-}
+  if [ "$#" -ge 2 ]; then
+    shift 2
+  fi
+  _el_label=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --label) _el_label=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -z "$_el_rel" ] || [ -z "$_el_uri" ]; then
+    np__drop 'external_links' 'rel and uri are required'
+    return 0
+  fi
+  _el_link=$(np__json_obj rel "$_el_rel" uri "$_el_uri" label "$_el_label")
+  _el_links=$(np__node_get "$_el_handle" external_links)
+  if [ -n "$_el_links" ]; then
+    _el_links="$_el_links,$_el_link"
+  else
+    _el_links=$_el_link
+  fi
+  np__node_set "$_el_handle" external_links "$_el_links"
+  np__stage_facet "$_el_handle" "$NP_FACET_EXTERNAL_LINKS" "[$_el_links]"
+  np__flush_foreign "$_el_handle"
+  return 0
+}
+
+# np_trace_engine_status [handle] <engine> <state> [--raw JSON]
+#
+# The underlying engine's own view of this node (a k8s rollout's status, a
+# queue's verdict), verbatim.
+np_trace_engine_status() {
+  _es_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_es_handle" || return 0
+  _es_engine=${1:-}
+  _es_state=${2:-}
+  if [ "$#" -ge 2 ]; then
+    shift 2
+  fi
+  _es_raw=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --raw) _es_raw=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -z "$_es_engine" ] || [ -z "$_es_state" ]; then
+    np__drop 'engine_status' 'engine and state are required'
+    return 0
+  fi
+  case "$_es_raw" in
+    '' | \{*) ;;
+    *) np__drop 'engine_status' 'raw must be a JSON object'; return 0 ;;
+  esac
+  np__stage_facet "$_es_handle" "$NP_FACET_ENGINE_STATUS" \
+    "$(np__json_obj_raw \
+        engine "$(np__json_str "$_es_engine")" \
+        state "$(np__json_str "$_es_state")" \
+        raw "$_es_raw")"
+  np__flush_foreign "$_es_handle"
+  return 0
+}
+
+# np_trace_dropped [handle] <reason>
+#
+# A record of data intentionally dropped — pair with np_trace_skip.
+np_trace_dropped() {
+  _dp_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_dp_handle" || return 0
+  if [ -z "${1:-}" ]; then
+    np__drop 'dropped' 'a reason is required'
+    return 0
+  fi
+  np__stage_facet "$_dp_handle" "$NP_FACET_DROPPED" "$(np__json_obj reason "$1")"
+  np__flush_foreign "$_dp_handle"
+  return 0
+}
+
+# np_trace_plan [handle] <json-array-of-steps>
+#
+# Declare the node's EXPECTED step plan ([{"key":...,"title":...}, ...]) so
+# the read model reports expected-vs-observed progress. On a reusable
+# definition, prefer np_trace_job --plan.
+np_trace_plan() {
+  _pl_handle=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_pl_handle" || return 0
+  case "${1:-}" in
+    \[*) ;;
+    *) np__drop 'plan' 'the plan must be a JSON array of steps'; return 0 ;;
+  esac
+  np__stage_facet "$_pl_handle" "$NP_FACET_PLAN" "$1"
+  np__flush_foreign "$_pl_handle"
   return 0
 }
 
