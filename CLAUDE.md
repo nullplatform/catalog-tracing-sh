@@ -51,6 +51,12 @@ A wire-contract change is therefore a **four-repo** change: the API, the JS SDK
   process substitution. `shellcheck -s sh` must pass clean. Remember there is no
   `local`: a recursive helper clobbers its caller's variables, so prefer
   iteration and per-function variable prefixes (`_sp_`, `_en_`, …).
+- **Readable names despite the prefixes.** The prefix is scoping, not an excuse
+  for cryptic code: the suffix must be a real word (`_io_handle`,
+  `_io_dataset_id` — never `_io_h`, `_io_id2`). Keep helper signatures small —
+  when several positional args travel together, derive them from one
+  discriminator (see `np__emit_io_edge`: the direction picks the edge type,
+  facet and store) instead of threading each through the call.
 - **Zero runtime dependencies** beyond `curl`, `awk`, `od`, `sed`, `tr`, `cut`,
   `date`, `mv`, `mkdir`. `jq` is a DEV dependency only — never at runtime.
 - **Speak the wire vocabulary** — never rename or invent concepts.
