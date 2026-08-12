@@ -117,6 +117,27 @@ set this only to override (e.g. backfilling historical runs).
 `np_trace_facet [h] <namespace> <json>` — your OWN namespace. Never a
 `tracing.*` one.
 `np_trace_schema [h] <url>`
+`np_trace_affordances [h] <json>` — what this node OFFERS a human to do; one
+object (`'{"kind":"deploy-log","scope_id":"42"}'`) or a bare array of them.
+`np_trace_progress [h] <current> <target> [unit]` — a converging phase's
+advance toward its target (instances 3 of 10); non-negative integers.
+
+---
+
+## Lineage
+
+`np_trace_produces [h] <dataset-id> [--name <n> --uri <locator>]` — this node
+WROTE the dataset. `np_trace_consumes` is the mirror (READ). The dataset id is
+the CANONICAL address — an ARN, an FQDN, `k8s-deployment:<ns>/<name>`,
+`docker-image:<url>` — the exact string the other side of the lineage also
+names; a synthesised id never joins. `--name`/`--uri` add a pointer descriptor
+that rides the node's `tracing.output`/`tracing.input` facet AND the edge's
+`tracing.binding`; bare form records lineage only.
+
+```sh
+np_trace_consumes "$step" "docker-image:$IMAGE" --name image --uri "$IMAGE"
+np_trace_produces "$step" "dns-record:$FQDN" --name dns_record --uri "$FQDN"
+```
 
 ---
 
@@ -174,7 +195,7 @@ disk and exits 0 rather than hanging the job.
 | `np_trace_facet "$run" tracing.plan '...'` | `tracing.*` is reserved; use your own namespace |
 | `np_trace_labels "app.id=$id" \|\| echo fail` | drops are recorded internally, not returned |
 | opening the run after the work | open at the TOP, so failures are captured |
-| `np_trace_produces` / `np_trace_actor` / `np_trace_inject` | Phase 2 — not implemented yet |
+| `np_trace_actor` / `np_trace_decision` | Phase 2 — not implemented yet |
 | `nptrace.sh step build` (subcommand) | Phase 2 — source the file and call functions |
 
 ---
@@ -182,13 +203,14 @@ disk and exits 0 rather than hanging the job.
 ## Not yet implemented (Phase 2)
 
 Do not generate: `np_trace_actor`, `np_trace_external_links`,
-`np_trace_affordances`, `np_trace_progress`, `np_trace_engine_status`,
+`np_trace_engine_status`,
 `np_trace_dropped`, `np_trace_plan`, `np_trace_decision`, `np_trace_retry`,
 `np_trace_signal`; the edge functions (`np_trace_triggered_by`,
 `np_trace_retry_of`, `np_trace_continues`, `np_trace_correlates`,
-`np_trace_instance_of`, `np_trace_compensates`, `np_trace_produces`,
-`np_trace_consumes`, `np_trace_link`); the io builders (`np_trace_input`,
-`np_trace_output`, and the ref/pointer variants); the ref constructors
-(`np_trace_run_ref`, `np_trace_step_ref`, `np_trace_dataset_ref`,
-`np_trace_job_ref`); propagation (`np_trace_inject`, `np_trace_extract`);
+`np_trace_instance_of`, `np_trace_compensates`, `np_trace_link`); the
+standalone io builders (`np_trace_input`, `np_trace_output`, and the
+ref/pointer variants — the pointer form is built into
+`np_trace_produces`/`np_trace_consumes` via `--name`/`--uri`); the ref
+constructors (`np_trace_run_ref`, `np_trace_step_ref`,
+`np_trace_dataset_ref`, `np_trace_job_ref`);
 `np_trace_dataset`, `np_trace_job`; and the subcommand CLI mode.

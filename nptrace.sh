@@ -1270,6 +1270,188 @@ np__stage_timing() {
 }
 
 # ---------------------------------------------------------------------------
+# Lineage — produces/consumes edges with io pointers
+# ---------------------------------------------------------------------------
+
+# A dataset ref for an edge endpoint. The id is the CANONICAL dataset id — the
+# exact string a producer and a consumer must both name for lineage to join
+# them by value (an ARN, an FQDN, `<type>:<url>` for an asset) — never a
+# synthesised id.
+np__dataset_ref() {
+  np__json_obj type dataset id "$1"
+}
+
+# The shared body of produces/consumes.
+# $1 handle, $2 edge type, $3 io facet namespace, $4 io side key (io_output /
+# io_input), $5 dataset id, $6 pointer name, $7 pointer uri.
+#
+# With a name+uri the io is declared ONCE as a pointer descriptor: it
+# accumulates into the node's tracing.input/tracing.output facet AND becomes
+# the edge's tracing.binding — the same single-source rule as the sibling
+# SDKs. Bare (no pointer) records lineage only.
+#
+# On a FOREIGN (adopted) node this is an observed fact, exactly like
+# np_trace_error: the edge is ours to say, and the staged io facet reaches the
+# wire through the foreign re-emit.
+np__io_edge() {
+  _ie_h=$1
+  _ie_type=$2
+  _ie_facet=$3
+  _ie_side=$4
+  _ie_id=$5
+  _ie_name=${6:-}
+  _ie_uri=${7:-}
+
+  _ie_binding=''
+  if [ -n "$_ie_name" ] && [ -n "$_ie_uri" ]; then
+    _ie_binding=$(np__json_obj kind pointer name "$_ie_name" uri "$_ie_uri")
+    # Append to the side's descriptor list; the facet is re-staged whole each
+    # time (last write wins per namespace), so the array only ever grows.
+    _ie_list=$(np__node_get "$_ie_h" "$_ie_side")
+    if [ -n "$_ie_list" ]; then
+      _ie_list="$_ie_list,$_ie_binding"
+    else
+      _ie_list="$_ie_binding"
+    fi
+    np__node_set "$_ie_h" "$_ie_side" "$_ie_list"
+    np__stage_facet "$_ie_h" "$_ie_facet" "[$_ie_list]"
+  fi
+
+  # An edge must not point FROM a node the read model has never seen.
+  np_trace_start "$_ie_h"
+
+  if [ -n "$_ie_binding" ]; then
+    _ie_data=$(np__json_obj_raw \
+      from "$(np__ref_of "$_ie_h")" \
+      to "$(np__dataset_ref "$_ie_id")" \
+      facets "{$(np__json_str "$NP_FACET_BINDING"):$_ie_binding}")
+  else
+    _ie_data=$(np__json_obj_raw \
+      from "$(np__ref_of "$_ie_h")" \
+      to "$(np__dataset_ref "$_ie_id")")
+  fi
+  np__spool "$_ie_type" "$(np__node_get "$_ie_h" nrn)" "$_ie_data" >/dev/null
+  np__flush_foreign "$_ie_h"
+  return 0
+}
+
+# np_trace_produces [handle] <dataset-id> [--name <n> --uri <locator>]
+#
+# Declare this node WROTE the dataset. `--name`/`--uri` record the io as a
+# pointer descriptor (the artifact's address) on both the node and the edge.
+np_trace_produces() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  _pr_h=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_pr_h" || { np__drop 'produces' 'no node in scope'; return 0; }
+  _pr_id=${1:-}
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
+  if [ -z "$_pr_id" ]; then
+    np__drop 'produces' 'dataset id is required'
+    return 0
+  fi
+  _pr_name=''
+  _pr_uri=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name) _pr_name=${2:-}; shift 2 ;;
+      --uri) _pr_uri=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  np__io_edge "$_pr_h" "$NP_TYPE_EDGE_PRODUCES" "$NP_FACET_OUTPUT" io_output \
+    "$_pr_id" "$_pr_name" "$_pr_uri"
+  return 0
+}
+
+# np_trace_consumes [handle] <dataset-id> [--name <n> --uri <locator>]
+#
+# Declare this node READ the dataset; see np_trace_produces.
+np_trace_consumes() {
+  [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
+  _cn_h=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_cn_h" || { np__drop 'consumes' 'no node in scope'; return 0; }
+  _cn_id=${1:-}
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
+  if [ -z "$_cn_id" ]; then
+    np__drop 'consumes' 'dataset id is required'
+    return 0
+  fi
+  _cn_name=''
+  _cn_uri=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name) _cn_name=${2:-}; shift 2 ;;
+      --uri) _cn_uri=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  np__io_edge "$_cn_h" "$NP_TYPE_EDGE_CONSUMES" "$NP_FACET_INPUT" io_input \
+    "$_cn_id" "$_cn_name" "$_cn_uri"
+  return 0
+}
+
+# np_trace_affordances [handle] <json>
+#
+# What this node OFFERS a human to do — a declared fact the UI renders as a
+# control (view live logs, switch traffic). One affordance object
+# ('{"kind":"deploy-log",...}') or a bare array of them; the wire form is
+# always the array.
+np_trace_affordances() {
+  _af_h=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_af_h" || return 0
+  _af_body=${1:-}
+  case "$_af_body" in
+    \[*) ;;
+    \{*) _af_body="[$_af_body]" ;;
+    *) np__drop 'affordances' 'body must be a JSON object or array'; return 0 ;;
+  esac
+  np__stage_facet "$_af_h" "$NP_FACET_AFFORDANCES" "$_af_body"
+  np__flush_foreign "$_af_h"
+  return 0
+}
+
+# np_trace_progress [handle] <current> <target> [unit]
+#
+# How far a CONVERGING phase has advanced toward its declared target —
+# instances 3 of 10, traffic 40 of 100. Non-negative integers; the optional
+# unit names what is counted ("percent", "instances").
+np_trace_progress() {
+  _pg_h=$(np__resolve_handle "${1:-}")
+  if np__is_handle "${1:-}"; then
+    shift
+  fi
+  np__is_handle "$_pg_h" || return 0
+  _pg_current=${1:-}
+  _pg_target=${2:-}
+  _pg_unit=${3:-}
+  case "$_pg_current$_pg_target" in
+    '' | *[!0-9]*) np__drop 'progress' 'current and target must be non-negative integers'; return 0 ;;
+  esac
+  [ -n "$_pg_current" ] && [ -n "$_pg_target" ] || {
+    np__drop 'progress' 'current and target must be non-negative integers'
+    return 0
+  }
+  np__stage_facet "$_pg_h" "$NP_FACET_PROGRESS" \
+    "$(np__json_obj_raw current "$_pg_current" target "$_pg_target" \
+        unit "$(if [ -n "$_pg_unit" ]; then np__json_str "$_pg_unit"; fi)")"
+  np__flush_foreign "$_pg_h"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Lifecycle terminals
 # ---------------------------------------------------------------------------
 
