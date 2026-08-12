@@ -19,12 +19,12 @@
 # so `NP_TRACE=$(np_trace_inject)` is always safe.
 np_trace_inject() {
   [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 0
-  _ij_h=$(np__resolve_handle "${1:-}")
-  np__is_handle "$_ij_h" || return 0
+  _inject_h=$(np__resolve_handle "${1:-}")
+  np__is_handle "$_inject_h" || return 0
   printf '%s%s%s%s%s' \
     "$NP_CARRIER_VERSION" "$NP_CARRIER_DELIMITER" \
-    "$(np__node_get "$_ij_h" trace_id)" "$NP_CARRIER_DELIMITER" \
-    "$(np__node_get "$_ij_h" run_id)"
+    "$(np__node_get "$_inject_h" trace_id)" "$NP_CARRIER_DELIMITER" \
+    "$(np__node_get "$_inject_h" run_id)"
   return 0
 }
 
@@ -38,31 +38,31 @@ np_trace_inject() {
 # When only a trace id is present it is used for both, matching the Go SDK, so
 # the result is always a usable pair.
 np_trace_extract() {
-  _ex_raw=${1-${NP_TRACE:-}}
-  [ -n "$_ex_raw" ] || return 1
+  _extract_raw=${1-${NP_TRACE:-}}
+  [ -n "$_extract_raw" ] || return 1
 
-  case "$_ex_raw" in
+  case "$_extract_raw" in
     "$NP_CARRIER_VERSION$NP_CARRIER_DELIMITER"*) ;;
     *) return 1 ;;
   esac
-  _ex_rest=${_ex_raw#*"$NP_CARRIER_DELIMITER"}
+  _extract_rest=${_extract_raw#*"$NP_CARRIER_DELIMITER"}
 
   # trace_id is up to the next delimiter; run_id is the whole remainder, which
   # may itself contain '~' and '@' but never a delimiter.
-  case "$_ex_rest" in
+  case "$_extract_rest" in
     *"$NP_CARRIER_DELIMITER"*)
-      _ex_trace=${_ex_rest%%"$NP_CARRIER_DELIMITER"*}
-      _ex_run=${_ex_rest#*"$NP_CARRIER_DELIMITER"}
+      _extract_trace=${_extract_rest%%"$NP_CARRIER_DELIMITER"*}
+      _extract_run=${_extract_rest#*"$NP_CARRIER_DELIMITER"}
       ;;
     *)
-      _ex_trace=$_ex_rest
-      _ex_run=$_ex_rest
+      _extract_trace=$_extract_rest
+      _extract_run=$_extract_rest
       ;;
   esac
-  [ -n "$_ex_trace" ] || return 1
-  [ -n "$_ex_run" ] || _ex_run=$_ex_trace
+  [ -n "$_extract_trace" ] || return 1
+  [ -n "$_extract_run" ] || _extract_run=$_extract_trace
 
-  printf '%s %s' "$_ex_trace" "$_ex_run"
+  printf '%s %s' "$_extract_trace" "$_extract_run"
   return 0
 }
 
@@ -84,37 +84,37 @@ np_trace_extract() {
 # run instead.
 np_trace_adopt() {
   [ "${NP_TRACE_ENABLED:-1}" = '1' ] || return 1
-  _ad_ctx=$(np_trace_extract "${1-${NP_TRACE:-}}") || return 1
-  _ad_trace=${_ad_ctx%% *}
-  _ad_run=${_ad_ctx#* }
+  _adopt_ctx=$(np_trace_extract "${1-${NP_TRACE:-}}") || return 1
+  _adopt_trace=${_adopt_ctx%% *}
+  _adopt_run=${_adopt_ctx#* }
 
-  if ! _ad_why=$(np__trace_id_violation "$_ad_trace"); then
-    np__drop 'adopt' "trace_id $_ad_why"
+  if ! _adopt_why=$(np__trace_id_violation "$_adopt_trace"); then
+    np__drop 'adopt' "trace_id $_adopt_why"
     return 1
   fi
   # An upstream run_id is commonly a DERIVED path (parent~key@attempt.iteration)
   # rather than a named id — the np CLI hands us the step it is running. Accept
   # either: parse it as a node path first, and only fall back to the named-id
   # rules when it has no delimiter.
-  if ! np__parse_node_id "$_ad_run" >/dev/null 2>&1; then
-    if ! _ad_why=$(np__named_id_violation "$_ad_run"); then
-      np__drop 'adopt' "run_id $_ad_why"
+  if ! np__parse_node_id "$_adopt_run" >/dev/null 2>&1; then
+    if ! _adopt_why=$(np__named_id_violation "$_adopt_run"); then
+      np__drop 'adopt' "run_id $_adopt_why"
       return 1
     fi
   fi
 
-  _ad_h=$(np__handle_new)
-  np__node_set "$_ad_h" kind run
-  np__node_set "$_ad_h" trace_id "$_ad_trace"
-  np__node_set "$_ad_h" run_id "$_ad_run"
-  np__node_set "$_ad_h" nrn "${NP_TRACE_NRN:-}"
-  np__node_set "$_ad_h" foreign 1
+  _adopt_h=$(np__handle_new)
+  np__node_set "$_adopt_h" kind run
+  np__node_set "$_adopt_h" trace_id "$_adopt_trace"
+  np__node_set "$_adopt_h" run_id "$_adopt_run"
+  np__node_set "$_adopt_h" nrn "${NP_TRACE_NRN:-}"
+  np__node_set "$_adopt_h" foreign 1
   # started=1 suppresses the lazy `started` emit; closed=0 keeps it usable as a
   # parent for the whole script.
-  np__node_set "$_ad_h" started 1
-  np__node_set "$_ad_h" closed 0
-  np__ambient_set "$_ad_h"
-  printf '%s' "$_ad_h"
+  np__node_set "$_adopt_h" started 1
+  np__node_set "$_adopt_h" closed 0
+  np__ambient_set "$_adopt_h"
+  printf '%s' "$_adopt_h"
   return 0
 }
 

@@ -32,15 +32,15 @@ np__state_init() {
 # Allocate the next handle. Handles are opaque by contract: consumers never
 # parse them.
 np__handle_new() {
-  _hn_seq=$(cat "$NP_TRACE_DIR/seq" 2>/dev/null || printf '0')
-  case "$_hn_seq" in
-    '' | *[!0-9]*) _hn_seq=0 ;;
+  _handle_new_seq=$(cat "$NP_TRACE_DIR/seq" 2>/dev/null || printf '0')
+  case "$_handle_new_seq" in
+    '' | *[!0-9]*) _handle_new_seq=0 ;;
   esac
-  _hn_seq=$((_hn_seq + 1))
-  printf '%s' "$_hn_seq" > "$NP_TRACE_DIR/seq"
-  _hn_handle="n$_hn_seq"
-  : > "$NP_TRACE_DIR/nodes/$_hn_handle"
-  printf '%s' "$_hn_handle"
+  _handle_new_seq=$((_handle_new_seq + 1))
+  printf '%s' "$_handle_new_seq" > "$NP_TRACE_DIR/seq"
+  _handle_new_handle="n$_handle_new_seq"
+  : > "$NP_TRACE_DIR/nodes/$_handle_new_handle"
+  printf '%s' "$_handle_new_handle"
 }
 
 # THE rule the whole public surface rests on: an argument is a handle iff it
@@ -56,23 +56,23 @@ np__is_handle() {
 }
 
 np__node_set() {
-  _ns_file="$NP_TRACE_DIR/nodes/$1"
-  [ -f "$_ns_file" ] || return 0
+  _node_set_file="$NP_TRACE_DIR/nodes/$1"
+  [ -f "$_node_set_file" ] || return 0
   # Drop any prior value for this key, then append the new one. The trailing
   # '=' in the match means a key that is a prefix of another never collides.
-  if grep -q "^$2=" "$_ns_file" 2>/dev/null; then
-    grep -v "^$2=" "$_ns_file" > "$_ns_file.tmp" 2>/dev/null || : > "$_ns_file.tmp"
-    mv "$_ns_file.tmp" "$_ns_file"
+  if grep -q "^$2=" "$_node_set_file" 2>/dev/null; then
+    grep -v "^$2=" "$_node_set_file" > "$_node_set_file.tmp" 2>/dev/null || : > "$_node_set_file.tmp"
+    mv "$_node_set_file.tmp" "$_node_set_file"
   fi
-  printf '%s=%s\n' "$2" "$3" >> "$_ns_file"
+  printf '%s=%s\n' "$2" "$3" >> "$_node_set_file"
   return 0
 }
 
 np__node_get() {
-  _ng_file="$NP_TRACE_DIR/nodes/$1"
-  [ -f "$_ng_file" ] || return 0
+  _node_get_file="$NP_TRACE_DIR/nodes/$1"
+  [ -f "$_node_get_file" ] || return 0
   # Strip only the leading "key=", so a value containing '=' survives intact.
-  sed -n "s/^$2=//p" "$_ng_file" 2>/dev/null | head -n 1
+  sed -n "s/^$2=//p" "$_node_get_file" 2>/dev/null | head -n 1
   return 0
 }
 

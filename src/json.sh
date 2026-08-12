@@ -57,52 +57,52 @@ np__json_str() {
 # JSON strings. A pair whose key or value is empty is OMITTED — an absent
 # optional is absent, never the string "".
 np__json_obj() {
-  _jo_out=''
+  _json_obj_out=''
   while [ "$#" -ge 2 ]; do
     if [ -n "$1" ] && [ -n "$2" ]; then
-      if [ -n "$_jo_out" ]; then
-        _jo_out="$_jo_out,"
+      if [ -n "$_json_obj_out" ]; then
+        _json_obj_out="$_json_obj_out,"
       fi
-      _jo_out="$_jo_out$(np__json_str "$1"):$(np__json_str "$2")"
+      _json_obj_out="$_json_obj_out$(np__json_str "$1"):$(np__json_str "$2")"
     fi
     shift 2
   done
-  printf '{%s}' "$_jo_out"
+  printf '{%s}' "$_json_obj_out"
 }
 
 # As np__json_obj, but each value is already-formed JSON inserted verbatim.
 # Use for nested objects, arrays, numbers, and booleans.
 np__json_obj_raw() {
-  _jor_out=''
+  _json_obj_raw_out=''
   while [ "$#" -ge 2 ]; do
     if [ -n "$1" ] && [ -n "$2" ]; then
-      if [ -n "$_jor_out" ]; then
-        _jor_out="$_jor_out,"
+      if [ -n "$_json_obj_raw_out" ]; then
+        _json_obj_raw_out="$_json_obj_raw_out,"
       fi
-      _jor_out="$_jor_out$(np__json_str "$1"):$2"
+      _json_obj_raw_out="$_json_obj_raw_out$(np__json_str "$1"):$2"
     fi
     shift 2
   done
-  printf '{%s}' "$_jor_out"
+  printf '{%s}' "$_json_obj_raw_out"
 }
 
 # A JSON array of strings from a comma-separated list ("a, b" → ["a","b"]).
 # Surrounding whitespace per item is trimmed; empty items are omitted.
 np__json_str_array_csv() {
-  _ja_out=''
-  _ja_rest=$1
-  while [ -n "$_ja_rest" ]; do
-    case "$_ja_rest" in
-      *,*) _ja_item=${_ja_rest%%,*}; _ja_rest=${_ja_rest#*,} ;;
-      *) _ja_item=$_ja_rest; _ja_rest='' ;;
+  _json_str_array_csv_out=''
+  _json_str_array_csv_rest=$1
+  while [ -n "$_json_str_array_csv_rest" ]; do
+    case "$_json_str_array_csv_rest" in
+      *,*) _json_str_array_csv_item=${_json_str_array_csv_rest%%,*}; _json_str_array_csv_rest=${_json_str_array_csv_rest#*,} ;;
+      *) _json_str_array_csv_item=$_json_str_array_csv_rest; _json_str_array_csv_rest='' ;;
     esac
-    _ja_item=$(printf '%s' "$_ja_item" | sed 's/^ *//; s/ *$//')
-    if [ -n "$_ja_item" ]; then
-      if [ -n "$_ja_out" ]; then
-        _ja_out="$_ja_out,"
+    _json_str_array_csv_item=$(printf '%s' "$_json_str_array_csv_item" | sed 's/^ *//; s/ *$//')
+    if [ -n "$_json_str_array_csv_item" ]; then
+      if [ -n "$_json_str_array_csv_out" ]; then
+        _json_str_array_csv_out="$_json_str_array_csv_out,"
       fi
-      _ja_out="$_ja_out$(np__json_str "$_ja_item")"
+      _json_str_array_csv_out="$_json_str_array_csv_out$(np__json_str "$_json_str_array_csv_item")"
     fi
   done
-  printf '[%s]' "$_ja_out"
+  printf '[%s]' "$_json_str_array_csv_out"
 }

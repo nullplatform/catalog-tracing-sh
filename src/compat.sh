@@ -15,12 +15,12 @@
 # 2001-09-09 and stay 13 until 2286, while seconds are 10. Anything shorter than
 # 13 is not milliseconds, whatever it looks like.
 np__epoch_ms() {
-  _cm_ms=$(date -u +%s%3N 2>/dev/null) || _cm_ms=''
-  case "$_cm_ms" in
-    '' | *[!0-9]*) _cm_ms='' ;;
+  _epoch_ms_ms=$(date -u +%s%3N 2>/dev/null) || _epoch_ms_ms=''
+  case "$_epoch_ms_ms" in
+    '' | *[!0-9]*) _epoch_ms_ms='' ;;
   esac
-  if [ -n "$_cm_ms" ] && [ "${#_cm_ms}" -ge 13 ]; then
-    printf '%s' "$_cm_ms"
+  if [ -n "$_epoch_ms_ms" ] && [ "${#_epoch_ms_ms}" -ge 13 ]; then
+    printf '%s' "$_epoch_ms_ms"
     return 0
   fi
   # Second precision. Event ids stay unique via their random bits.
@@ -29,9 +29,9 @@ np__epoch_ms() {
 
 # Exactly $1 lowercase hex characters from the kernel CSPRNG.
 np__rand_hex() {
-  _rh_want=$1
-  _rh_bytes=$(( (_rh_want + 1) / 2 ))
-  od -An -tx1 -N"$_rh_bytes" /dev/urandom | tr -d ' \n' | cut -c1-"$_rh_want"
+  _rand_hex_want=$1
+  _rand_hex_bytes=$(( (_rand_hex_want + 1) / 2 ))
+  od -An -tx1 -N"$_rand_hex_bytes" /dev/urandom | tr -d ' \n' | cut -c1-"$_rand_hex_want"
 }
 
 # RFC 3339 UTC, second precision — the envelope `time` field.

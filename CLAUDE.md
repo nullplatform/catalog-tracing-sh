@@ -52,11 +52,14 @@ A wire-contract change is therefore a **four-repo** change: the API, the JS SDK
   `local`: a recursive helper clobbers its caller's variables, so prefer
   iteration and per-function variable prefixes (`_sp_`, `_en_`, …).
 - **Readable names despite the prefixes.** The prefix is scoping, not an excuse
-  for cryptic code: the suffix must be a real word (`_io_handle`,
-  `_io_dataset_id` — never `_io_h`, `_io_id2`). Keep helper signatures small —
-  when several positional args travel together, derive them from one
-  discriminator (see `np__emit_io_edge`: the direction picks the edge type,
-  facet and store) instead of threading each through the call.
+  for cryptic code: a function's variable prefix IS ITS OWN STRIPPED NAME
+  (`np_trace_actor` → `_actor_kind`, `np__node_set` → `_node_set_file`) and the
+  suffix is a real word — never two-letter codes on either side. Helper names
+  say what they do (`np__declare_lineage`, `np__build_io_descriptor` — not
+  `np__lineage_verb`). Keep helper signatures small — when several positional
+  args travel together, derive them from one discriminator (see
+  `np__emit_io_edge`: the direction picks the edge type, facet and store)
+  instead of threading each through the call.
 - **Zero runtime dependencies** beyond `curl`, `awk`, `od`, `sed`, `tr`, `cut`,
   `date`, `mv`, `mkdir`. `jq` is a DEV dependency only — never at runtime.
 - **Speak the wire vocabulary** — never rename or invent concepts.

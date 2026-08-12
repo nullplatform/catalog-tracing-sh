@@ -71,26 +71,26 @@ np__parse_node_id() {
     *"$NP_ID_DELIMITER"*) ;;
     *) return 1 ;;
   esac
-  _pn_parent=${1%"$NP_ID_DELIMITER"*}
-  _pn_tail=${1##*"$NP_ID_DELIMITER"}
-  case "$_pn_tail" in
+  _parse_node_id_parent=${1%"$NP_ID_DELIMITER"*}
+  _parse_node_id_tail=${1##*"$NP_ID_DELIMITER"}
+  case "$_parse_node_id_tail" in
     *@*.*) ;;
     *) return 1 ;;
   esac
-  _pn_key=${_pn_tail%%@*}
-  _pn_coord=${_pn_tail#*@}
-  _pn_attempt=${_pn_coord%%.*}
-  _pn_iteration=${_pn_coord#*.}
-  if [ -z "$_pn_parent" ] || [ -z "$_pn_key" ]; then
+  _parse_node_id_key=${_parse_node_id_tail%%@*}
+  _parse_node_id_coord=${_parse_node_id_tail#*@}
+  _parse_node_id_attempt=${_parse_node_id_coord%%.*}
+  _parse_node_id_iteration=${_parse_node_id_coord#*.}
+  if [ -z "$_parse_node_id_parent" ] || [ -z "$_parse_node_id_key" ]; then
     return 1
   fi
-  case "$_pn_attempt" in
+  case "$_parse_node_id_attempt" in
     '' | *[!0-9]*) return 1 ;;
   esac
-  case "$_pn_iteration" in
+  case "$_parse_node_id_iteration" in
     '' | *[!0-9]*) return 1 ;;
   esac
-  printf '%s %s %s %s' "$_pn_parent" "$_pn_key" "$_pn_attempt" "$_pn_iteration"
+  printf '%s %s %s %s' "$_parse_node_id_parent" "$_parse_node_id_key" "$_parse_node_id_attempt" "$_parse_node_id_iteration"
 }
 
 # Join parts into a stable id, dropping empty parts. Use instead of
