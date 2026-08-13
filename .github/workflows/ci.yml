@@ -1,0 +1,114 @@
+name: ci-nullplatform
+
+# Gate (lint + the shell portability matrix) on every push and PR. On a green
+# push to main, register a nullplatform build. The SDK is a library — there is
+# no docker image or lambda — but a nullplatform build needs at least one asset
+# to be marked successful, so the build registers the generated nptrace.sh as a
+# `bundle` asset (a URL pointer, no upload). nullplatform cuts releases from
+# these green builds.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: make lint
+
+  # Portability is the real risk in pure POSIX sh: the SDK must behave
+  # identically on whatever shell a consumer's CI image happens to ship.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [/bin/dash, /bin/bash]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y dash jq bats
+      - run: ./build.sh
+      - name: Run the suites
+        env:
+          TEST_SHELL: ${{ matrix.shell }}
+        # bats runs in bash; NP_TEST_SHELL is the shell the SDK is exercised in.
+        run: NP_TEST_SHELL="$TEST_SHELL" bats test/unit test/integration
+
+  # busybox ash is the most limited shell/awk/od combination we support, and the
+  # one most likely to be the CI image a consumer actually runs in.
+  #
+  # alpine rather than busybox: /bin/sh IS busybox there, so the SDK still runs
+  # under busybox ash, but bash (for bats) and jq are one apk away. The bare
+  # busybox image has neither, which meant the jq differential checks silently
+  # skipped on the leg that needed them most.
+  #
+  # Still not `container:`: actions/checkout is a JS action and alpine is musl,
+  # so the runner's own Node cannot start inside it. Check out on the host and
+  # run the container ourselves — also exactly how `make test-busybox` runs it.
+  test-busybox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the suites under busybox ash
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w alpine:latest sh -c '
+            apk add --no-cache bash bats jq >/dev/null
+            sh build.sh >/dev/null
+            NP_TEST_SHELL=/bin/sh bats test/unit test/integration
+          '
+
+  # nptrace.sh is generated from src/*.sh and committed so consumers can vendor
+  # it without a build step. A stale artifact is a release footgun.
+  built-artifact-is-current:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./build.sh
+      - name: nptrace.sh must match src/
+        run: git diff --exit-code nptrace.sh
+
+  nullplatform:
+    needs: [lint, test, test-busybox, built-artifact-is-current]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # the nullplatform CLI authenticates via the GitHub OIDC token
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nullplatform CLI
+        run: curl https://cli.nullplatform.com/install.sh | sh
+
+      - name: Start nullplatform build
+        id: np_build
+        env:
+          NULLPLATFORM_API_KEY: ${{ secrets.NULLPLATFORM_API_KEY }}
+        run: np build start
+
+      # A library has no docker/lambda asset, but a build needs >=1 asset to be
+      # marked successful. This SDK's artifact is the single generated file, so
+      # register it as a `bundle` asset — a URL pointer to the raw file at this
+      # commit (the CLI only stores the URL for this type; it uploads nothing).
+      - name: Register nptrace.sh as a bundle asset
+        env:
+          NULLPLATFORM_API_KEY: ${{ secrets.NULLPLATFORM_API_KEY }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          np asset push --type bundle --name main --platform x86_64 \
+            --source "nptrace.sh@${COMMIT_SHA}" \
+            --url "https://raw.githubusercontent.com/${REPO}/${COMMIT_SHA}/nptrace.sh"
+
+      - name: Finish nullplatform build
+        if: ${{ always() && steps.np_build.outcome == 'success' }}
+        env:
+          NULLPLATFORM_API_KEY: ${{ secrets.NULLPLATFORM_API_KEY }}
+        run: np build update --status ${{ contains(fromJSON('["failure", "cancelled"]'), job.status) && 'failed' || 'successful' }}
