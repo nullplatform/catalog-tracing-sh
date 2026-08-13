@@ -3,10 +3,10 @@
 The POSIX shell SDK (`nptrace.sh`) for the nullplatform tracing API.
 Producer-only; zero runtime dependencies beyond `curl` and the POSIX toolset.
 
-## Treat this repo as PUBLIC
+## This repo is PUBLIC
 
-The repository may be private for now, but treat everything (code, comments,
-examples, README, `llms.txt`, commit messages) as public:
+Everything here (code, comments, examples, README, `llms.txt`, commit
+messages) is public:
 
 - **No internal leaks.** Only the public `api.nullplatform.com` endpoints —
   never internal/in-cluster hosts, private URLs, credentials/tokens, internal
@@ -32,9 +32,6 @@ facets, id/identity grammar, validation rules), sync this SDK:
    missed change shows up red here.
 4. Rebuild (`./build.sh`) and commit `nptrace.sh`. CI fails if the committed
    artifact is stale.
-
-A wire-contract change is therefore a **four-repo** change: the API, the JS SDK
-(copy), the Go SDK (port), and this one (port).
 
 ## Invariants — do not break
 
@@ -88,7 +85,7 @@ make lint && make test-all
 The live end-to-end suite is skipped unless `NP_LIVE_URL` is set:
 
 ```sh
-# with the tracing API + projector running locally
+# with the tracing API running locally
 NP_LIVE_URL=http://localhost:8080 bats test/integration
 ```
 
@@ -104,14 +101,13 @@ make test-busybox
 ## Releases
 
 **nullplatform owns the version.** It cuts a release from a green build and
-`nullplatform-github-integration[bot]` creates the GitHub Release; the tag is
-the version. Tags are **bare — no `v` prefix** (`0.1.0`, matching
-catalog-tracing-js and the CLI).
+creates the matching GitHub Release; the tag is the version. Tags are **bare —
+no `v` prefix** (`0.1.0`, matching the other nullplatform SDKs and the CLI).
 
 `NP_TRACE_VERSION` in `src/header.sh` is therefore **not** the source of truth.
-`publish.yml` stamps it from the release tag before building the artifact it
-uploads, and `mirror-version.yml` writes it back into `main` afterwards. Do not
-bump it by hand to cut a release — that only desynchronises the two.
+`mirror-version.yml` stamps it from the release tag back into `main` after each
+release. Do not bump it by hand to cut a release — that only desynchronises the
+repo from the released version.
 
 **Distribution is the repository itself** — consumers add it as a git
 submodule pinned to a release tag (or vendor the one file for archive-safe

@@ -2,14 +2,11 @@ name: mirror-version
 
 # nullplatform owns the version. When it cuts a release and creates the matching
 # GitHub Release, this mirrors the release tag into src/header.sh on main, so the
-# repo and local/dev runs report the real version. publish.yml already stamps the
-# version into the *published* artifact at publish time; this is the separate,
-# repo-side mirror. It is its own workflow so publish.yml — which holds the AWS
-# OIDC trust — keeps contents:read and never needs repo-write.
+# repo — which is also the distribution artifact — reports the real version.
 #
-# Unlike the JS SDK's mirror, this one must also run ./build.sh: NP_TRACE_VERSION
-# is concatenated into the committed nptrace.sh, and CI's built-artifact-is-current
-# job fails if the artifact and src/ disagree. Both files move together or neither.
+# The mirror must also run ./build.sh: NP_TRACE_VERSION is concatenated into the
+# committed nptrace.sh, and CI's built-artifact-is-current job fails if the
+# artifact and src/ disagree. Both files move together or neither.
 #
 # main is PR-protected, so the bot can't push directly — it opens a one-file PR and
 # merges it itself. This works when the branch ruleset requires a PR but no approvals
