@@ -2093,8 +2093,12 @@ np_trace_affordances() {
 # np_trace_progress [handle] <current> <target> [unit]
 #
 # How far a CONVERGING phase has advanced toward its declared target —
-# instances 3 of 10, traffic 40 of 100. Non-negative integers; the optional
-# unit names what is counted ("percent", "instances").
+# instances 3 of 10, traffic 40 of 100. Non-negative integers. The unit is a
+# number-FORMAT hint from the wire's CLOSED vocabulary (percent, count, bytes,
+# milliseconds) — the API rejects the whole EVENT over an unknown unit, and an
+# enriched node re-emits its full facet bag, so one bad unit would poison every
+# later emission. A word outside the vocabulary is therefore dropped here (the
+# noun belongs in the step's title, not the unit).
 np_trace_progress() {
   _progress_handle=$(np__resolve_handle "${1:-}")
   if np__is_handle "${1:-}"; then
@@ -2110,6 +2114,13 @@ np_trace_progress() {
   fi
   case "$_progress_current$_progress_target" in
     *[!0-9]*) np__drop 'progress' 'current and target must be non-negative integers'; return 0 ;;
+  esac
+  case "$_progress_unit" in
+    '' | percent | count | bytes | milliseconds) ;;
+    *)
+      np__drop 'progress' "unit '$_progress_unit' is not in the wire vocabulary (percent, count, bytes, milliseconds); omitted"
+      _progress_unit=''
+      ;;
   esac
   np__stage_facet "$_progress_handle" "$NP_FACET_PROGRESS" \
     "$(np__json_obj_raw current "$_progress_current" target "$_progress_target" \

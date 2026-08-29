@@ -133,11 +133,24 @@ load '../helper'
 @test "progress records current/target as numbers, with the unit" {
   np_sh_state '
     run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_progress "$run" 3 10 count
+    np_trace_complete "$run"
+    wire
+  '
+  assert_out_match '*"tracing.progress":{"current":3,"target":10,"unit":"count"}*'
+}
+
+@test "progress drops a unit outside the wire vocabulary — the numbers still travel" {
+  # The API rejects the whole EVENT over an unknown unit, and an enriched node
+  # re-emits its full bag — one bad unit must never poison later emissions.
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
     np_trace_progress "$run" 3 10 instances
     np_trace_complete "$run"
     wire
   '
-  assert_out_match '*"tracing.progress":{"current":3,"target":10,"unit":"instances"}*'
+  assert_out_match '*"tracing.progress":{"current":3,"target":10}*'
+  ! [[ "$output" == *'"unit":"instances"'* ]]
 }
 
 @test "progress rejects non-integers as a drop" {
