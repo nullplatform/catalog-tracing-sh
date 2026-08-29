@@ -845,7 +845,8 @@ np_trace_adopt() {
   # rather than a named id — the np CLI hands us the step it is running. Accept
   # either: parse it as a node path first, and only fall back to the named-id
   # rules when it has no delimiter.
-  if ! np__parse_node_id "$_adopt_run" >/dev/null 2>&1; then
+  if ! _adopt_coords=$(np__parse_node_id "$_adopt_run" 2>/dev/null); then
+    _adopt_coords=''
     if ! _adopt_why=$(np__named_id_violation "$_adopt_run"); then
       np__drop 'adopt' "run_id $_adopt_why"
       return 1
@@ -856,6 +857,15 @@ np_trace_adopt() {
   np__node_set "$_adopt_h" kind run
   np__node_set "$_adopt_h" trace_id "$_adopt_trace"
   np__node_set "$_adopt_h" run_id "$_adopt_run"
+  # A keyed (derived-path) node event must carry its coordinate triple — the
+  # API rejects a derived run_id whose key/attempt/iteration are absent. The
+  # foreign re-emit (np__flush_foreign) therefore needs the coordinates on the
+  # handle, even though the node itself stays the upstream owner's to close.
+  if [ -n "$_adopt_coords" ]; then
+    np__node_set "$_adopt_h" key "$(printf '%s' "$_adopt_coords" | cut -d' ' -f2)"
+    np__node_set "$_adopt_h" attempt "$(printf '%s' "$_adopt_coords" | cut -d' ' -f3)"
+    np__node_set "$_adopt_h" iteration "$(printf '%s' "$_adopt_coords" | cut -d' ' -f4)"
+  fi
   np__node_set "$_adopt_h" nrn "${NP_TRACE_NRN:-}"
   np__node_set "$_adopt_h" foreign 1
   # started=1 suppresses the lazy `started` emit; closed=0 keeps it usable as a
