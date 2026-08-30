@@ -174,15 +174,22 @@ load '../helper'
   assert_out_match '*"tracing.output":\[{"kind":"ref","name":"application","source":"catalog","external_id":"app-42","version":"3"}\]*'
 }
 
-@test "produces accepts every descriptor kind as the edge binding" {
+@test "the edge binding is the WIRE shape ({name}) for every descriptor kind" {
   np_sh_state '
     run=$(np_trace_run --trace-id tr1 --run-id tr1)
     np_trace_produces "$run" "asset:one" --name artifact --source registry --external-id img-9
     np_trace_consumes "$run" "asset:two" --name params --value "{\"replicas\":3}"
+    np_trace_complete "$run"
     wire
   '
-  assert_out_match '*"tracing.binding":{"kind":"ref","name":"artifact","source":"registry","external_id":"img-9"}*'
-  assert_out_match '*"tracing.binding":{"kind":"inline","name":"params","value":{"replicas":3}}*'
+  # tracing.binding allows only {name, content_type?, size_bytes?} — the io
+  # descriptor (kind/uri/value) is node-facet vocabulary and dead-letters an edge.
+  assert_out_match '*"tracing.binding":{"name":"artifact"}*'
+  assert_out_match '*"tracing.binding":{"name":"params"}*'
+  ! [[ "$output" == *'"tracing.binding":{"kind"'* ]]
+  # the full descriptors still ride the NODE io facets
+  assert_out_match '*{"kind":"ref","name":"artifact","source":"registry","external_id":"img-9"}*'
+  assert_out_match '*{"kind":"inline","name":"params","value":{"replicas":3}}*'
 }
 
 # --- safety ------------------------------------------------------------------

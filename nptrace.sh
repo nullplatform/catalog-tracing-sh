@@ -1497,9 +1497,11 @@ np_trace_input() {
 # edge.produces + tracing.output, `in` is edge.consumes + tracing.input.
 #
 # With a descriptor the io is declared ONCE: it upserts into the node's io
-# facet BY NAME (a re-declared name replaces its entry) AND becomes the
-# edge's tracing.binding — the same single-source rule as the sibling SDKs.
-# Without one, the edge records lineage only.
+# facet BY NAME (a re-declared name replaces its entry), and the edge carries
+# a tracing.binding built from it. The binding's WIRE shape is `{name,
+# content_type?, size_bytes?}` — never the io descriptor itself (whose
+# kind/uri/value the binding schema rejects, dead-lettering the edge).
+# Without a descriptor, the edge records lineage only.
 #
 # On a FOREIGN (adopted) node this is an observed fact, exactly like
 # np_trace_error: the edge is ours to say, and the staged io facet reaches the
@@ -1519,18 +1521,19 @@ np__emit_io_edge() {
     _emit_io_edge_descriptor_store=io_input
   fi
 
-  _emit_io_edge_binding=$4
-  _emit_io_edge_binding_name=${5:-$_emit_io_edge_binding}
+  _emit_io_edge_descriptor=$4
+  _emit_io_edge_name=${5:-}
 
-  if [ -n "$_emit_io_edge_binding" ]; then
+  if [ -n "$_emit_io_edge_descriptor" ]; then
     np__upsert_descriptor "$_emit_io_edge_handle" "$_emit_io_edge_facet_namespace" "$_emit_io_edge_descriptor_store" \
-      "$_emit_io_edge_binding" "$_emit_io_edge_binding_name"
+      "$_emit_io_edge_descriptor" "${_emit_io_edge_name:-$_emit_io_edge_descriptor}"
   fi
 
   # An edge must not point FROM a node the read model has never seen.
   np_trace_start "$_emit_io_edge_handle"
 
-  if [ -n "$_emit_io_edge_binding" ]; then
+  if [ -n "$_emit_io_edge_descriptor" ] && [ -n "$_emit_io_edge_name" ]; then
+    _emit_io_edge_binding=$(np__json_obj name "$_emit_io_edge_name")
     _emit_io_edge_edge_data=$(np__json_obj_raw \
       from "$(np__ref_of "$_emit_io_edge_handle")" \
       to "$(np__dataset_ref "$_emit_io_edge_dataset_id")" \
