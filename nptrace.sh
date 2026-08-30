@@ -845,7 +845,8 @@ np_trace_adopt() {
   # rather than a named id — the np CLI hands us the step it is running. Accept
   # either: parse it as a node path first, and only fall back to the named-id
   # rules when it has no delimiter.
-  if ! np__parse_node_id "$_adopt_run" >/dev/null 2>&1; then
+  if ! _adopt_coords=$(np__parse_node_id "$_adopt_run" 2>/dev/null); then
+    _adopt_coords=''
     if ! _adopt_why=$(np__named_id_violation "$_adopt_run"); then
       np__drop 'adopt' "run_id $_adopt_why"
       return 1
@@ -856,6 +857,15 @@ np_trace_adopt() {
   np__node_set "$_adopt_h" kind run
   np__node_set "$_adopt_h" trace_id "$_adopt_trace"
   np__node_set "$_adopt_h" run_id "$_adopt_run"
+  # A keyed (derived-path) node event must carry its coordinate triple — the
+  # API rejects a derived run_id whose key/attempt/iteration are absent. The
+  # foreign re-emit (np__flush_foreign) therefore needs the coordinates on the
+  # handle, even though the node itself stays the upstream owner's to close.
+  if [ -n "$_adopt_coords" ]; then
+    np__node_set "$_adopt_h" key "$(printf '%s' "$_adopt_coords" | cut -d' ' -f2)"
+    np__node_set "$_adopt_h" attempt "$(printf '%s' "$_adopt_coords" | cut -d' ' -f3)"
+    np__node_set "$_adopt_h" iteration "$(printf '%s' "$_adopt_coords" | cut -d' ' -f4)"
+  fi
   np__node_set "$_adopt_h" nrn "${NP_TRACE_NRN:-}"
   np__node_set "$_adopt_h" foreign 1
   # started=1 suppresses the lazy `started` emit; closed=0 keeps it usable as a
@@ -1117,26 +1127,44 @@ np_trace_child() {
 # Staging context
 # ---------------------------------------------------------------------------
 
-# Merge a pre-formed `"key":value` fragment into the node's staged labels.
-np__stage_label() {
-  _stage_label_cur=$(np__node_get "$1" labels)
-  if [ -z "$_stage_label_cur" ] || [ "$_stage_label_cur" = '{}' ]; then
-    np__node_set "$1" labels "{$2}"
-  else
-    np__node_set "$1" labels "${_stage_label_cur%\}},$2}"
-  fi
+# Upsert one pre-formed `"key":value` entry into a node's staged OBJECT store
+# (labels / facets) under its key: re-staging a key REPLACES its entry, so an
+# event never ships duplicate keys the parser has to break ties on — and a
+# step that re-stages its narrative per heartbeat never grows its payload.
+# $1 handle, $2 store key, $3 the `"key":value` entry, $4 the entry's key.
+np__stage_entry() {
+  _stage_entry_handle=$1
+  _stage_entry_store=$2
+  _stage_entry_slot=$(np__descriptor_slot "$4")
+  _stage_entry_slots=$(np__node_get "$_stage_entry_handle" "${_stage_entry_store}_slots")
+  case " $_stage_entry_slots " in
+    *" $_stage_entry_slot "*) ;;
+    *)
+      _stage_entry_slots="${_stage_entry_slots:+$_stage_entry_slots }$_stage_entry_slot"
+      np__node_set "$_stage_entry_handle" "${_stage_entry_store}_slots" "$_stage_entry_slots"
+      ;;
+  esac
+  np__node_set "$_stage_entry_handle" "${_stage_entry_store}.$_stage_entry_slot" "$3"
+  _stage_entry_joined=''
+  for _stage_entry_each in $_stage_entry_slots; do
+    _stage_entry_value=$(np__node_get "$_stage_entry_handle" "${_stage_entry_store}.$_stage_entry_each")
+    [ -n "$_stage_entry_value" ] || continue
+    _stage_entry_joined="${_stage_entry_joined:+$_stage_entry_joined,}$_stage_entry_value"
+  done
+  np__node_set "$_stage_entry_handle" "$_stage_entry_store" "{$_stage_entry_joined}"
   return 0
 }
 
+# Merge a pre-formed `"key":value` fragment into the node's staged labels.
+np__stage_label() {
+  _stage_label_key=$(printf '%s' "$2" | sed -n 's/^"\([^"]*\)".*/\1/p')
+  np__stage_entry "$1" labels "$2" "${_stage_label_key:-$2}"
+  return 0
+}
+
+# Last write wins per namespace: re-staging a facet replaces its entry.
 np__stage_facet() {
-  _stage_facet_cur=$(np__node_get "$1" facets)
-  _stage_facet_entry="$(np__json_str "$2"):$3"
-  if [ -z "$_stage_facet_cur" ] || [ "$_stage_facet_cur" = '{}' ]; then
-    np__node_set "$1" facets "{$_stage_facet_entry}"
-  else
-    # Last write wins per namespace: drop any prior entry for this facet.
-    np__node_set "$1" facets "${_stage_facet_cur%\}},$_stage_facet_entry}"
-  fi
+  np__stage_entry "$1" facets "$(np__json_str "$2"):$3" "$2"
   return 0
 }
 
@@ -1314,19 +1342,42 @@ np__dataset_ref() {
   np__json_obj type dataset id "$1"
 }
 
-# Append one io descriptor to a direction's list; the facet is re-staged
-# whole each time (last write wins per namespace), so the array only ever
-# grows. $1 handle, $2 facet namespace, $3 descriptor store key, $4 the
-# already-formed descriptor JSON.
-np__append_io_descriptor() {
-  _append_io_descriptor_descriptors=$(np__node_get "$1" "$3")
-  if [ -n "$_append_io_descriptor_descriptors" ]; then
-    _append_io_descriptor_descriptors="$_append_io_descriptor_descriptors,$4"
-  else
-    _append_io_descriptor_descriptors=$4
-  fi
-  np__node_set "$1" "$3" "$_append_io_descriptor_descriptors"
-  np__stage_facet "$1" "$2" "[$_append_io_descriptor_descriptors]"
+# A store-safe slot id for a descriptor's identity string (an io NAME, an
+# affordance KIND): cksum is POSIX everywhere and collision-resistant enough
+# for a node's handful of descriptors.
+np__descriptor_slot() {
+  printf '%s' "$1" | cksum | tr ' \t' '__'
+}
+
+# Upsert one descriptor into a node's list by IDENTITY; the facet is re-staged
+# whole each time (last write wins per namespace). A re-declared identity
+# REPLACES its previous descriptor in place — a step that reports the same
+# name as its state evolves ("instances" per heartbeat) owns ONE entry
+# carrying the latest telling, at its first telling's position — while a new
+# identity appends. $1 handle, $2 facet namespace, $3 descriptor store key,
+# $4 the already-formed descriptor JSON, $5 the identity string.
+np__upsert_descriptor() {
+  _upsert_descriptor_handle=$1
+  _upsert_descriptor_facet=$2
+  _upsert_descriptor_store=$3
+  _upsert_descriptor_slot=$(np__descriptor_slot "$5")
+  _upsert_descriptor_slots=$(np__node_get "$_upsert_descriptor_handle" "${_upsert_descriptor_store}_slots")
+  case " $_upsert_descriptor_slots " in
+    *" $_upsert_descriptor_slot "*) ;;
+    *)
+      _upsert_descriptor_slots="${_upsert_descriptor_slots:+$_upsert_descriptor_slots }$_upsert_descriptor_slot"
+      np__node_set "$_upsert_descriptor_handle" "${_upsert_descriptor_store}_slots" "$_upsert_descriptor_slots"
+      ;;
+  esac
+  np__node_set "$_upsert_descriptor_handle" "${_upsert_descriptor_store}.$_upsert_descriptor_slot" "$4"
+  _upsert_descriptor_list=''
+  for _upsert_descriptor_each in $_upsert_descriptor_slots; do
+    _upsert_descriptor_value=$(np__node_get "$_upsert_descriptor_handle" "${_upsert_descriptor_store}.$_upsert_descriptor_each")
+    [ -n "$_upsert_descriptor_value" ] || continue
+    _upsert_descriptor_list="${_upsert_descriptor_list:+$_upsert_descriptor_list,}$_upsert_descriptor_value"
+  done
+  np__node_set "$_upsert_descriptor_handle" "$_upsert_descriptor_store" "$_upsert_descriptor_list"
+  np__stage_facet "$_upsert_descriptor_handle" "$_upsert_descriptor_facet" "[$_upsert_descriptor_list]"
   return 0
 }
 
@@ -1410,9 +1461,9 @@ np__declare_io() {
   _declare_io_descriptor=$(np__build_io_descriptor "$_declare_io_verb" "$_declare_io_name" "$_declare_io_inline" \
     "$_declare_io_uri" "$_declare_io_ref_source" "$_declare_io_ref_id" "$_declare_io_ref_version") || return 0
   if [ "$_declare_io_direction" = 'out' ]; then
-    np__append_io_descriptor "$_declare_io_handle" "$NP_FACET_OUTPUT" io_output "$_declare_io_descriptor"
+    np__upsert_descriptor "$_declare_io_handle" "$NP_FACET_OUTPUT" io_output "$_declare_io_descriptor" "$_declare_io_name"
   else
-    np__append_io_descriptor "$_declare_io_handle" "$NP_FACET_INPUT" io_input "$_declare_io_descriptor"
+    np__upsert_descriptor "$_declare_io_handle" "$NP_FACET_INPUT" io_input "$_declare_io_descriptor" "$_declare_io_name"
   fi
   np__flush_foreign "$_declare_io_handle"
   return 0
@@ -1440,14 +1491,17 @@ np_trace_input() {
   return 0
 }
 
-# np__emit_io_edge <handle> <direction> <dataset-id> [descriptor-json]
+# np__emit_io_edge <handle> <direction> <dataset-id> [descriptor-json] [descriptor-name]
 #
 # Emit one lineage edge. The direction decides everything else: `out` is
 # edge.produces + tracing.output, `in` is edge.consumes + tracing.input.
 #
-# With a descriptor the io is declared ONCE: it accumulates into the node's
-# io facet AND becomes the edge's tracing.binding — the same single-source
-# rule as the sibling SDKs. Without one, the edge records lineage only.
+# With a descriptor the io is declared ONCE: it upserts into the node's io
+# facet BY NAME (a re-declared name replaces its entry), and the edge carries
+# a tracing.binding built from it. The binding's WIRE shape is `{name,
+# content_type?, size_bytes?}` — never the io descriptor itself (whose
+# kind/uri/value the binding schema rejects, dead-lettering the edge).
+# Without a descriptor, the edge records lineage only.
 #
 # On a FOREIGN (adopted) node this is an observed fact, exactly like
 # np_trace_error: the edge is ours to say, and the staged io facet reaches the
@@ -1467,16 +1521,19 @@ np__emit_io_edge() {
     _emit_io_edge_descriptor_store=io_input
   fi
 
-  _emit_io_edge_binding=$4
+  _emit_io_edge_descriptor=$4
+  _emit_io_edge_name=${5:-}
 
-  if [ -n "$_emit_io_edge_binding" ]; then
-    np__append_io_descriptor "$_emit_io_edge_handle" "$_emit_io_edge_facet_namespace" "$_emit_io_edge_descriptor_store" "$_emit_io_edge_binding"
+  if [ -n "$_emit_io_edge_descriptor" ]; then
+    np__upsert_descriptor "$_emit_io_edge_handle" "$_emit_io_edge_facet_namespace" "$_emit_io_edge_descriptor_store" \
+      "$_emit_io_edge_descriptor" "${_emit_io_edge_name:-$_emit_io_edge_descriptor}"
   fi
 
   # An edge must not point FROM a node the read model has never seen.
   np_trace_start "$_emit_io_edge_handle"
 
-  if [ -n "$_emit_io_edge_binding" ]; then
+  if [ -n "$_emit_io_edge_descriptor" ] && [ -n "$_emit_io_edge_name" ]; then
+    _emit_io_edge_binding=$(np__json_obj name "$_emit_io_edge_name")
     _emit_io_edge_edge_data=$(np__json_obj_raw \
       from "$(np__ref_of "$_emit_io_edge_handle")" \
       to "$(np__dataset_ref "$_emit_io_edge_dataset_id")" \
@@ -1540,7 +1597,8 @@ np__declare_lineage() {
       "$_declare_lineage_uri" "$_declare_lineage_ref_source" "$_declare_lineage_ref_id" "$_declare_lineage_ref_version") || return 0
   fi
 
-  np__emit_io_edge "$_declare_lineage_handle" "$_declare_lineage_direction" "$_declare_lineage_dataset_id" "$_declare_lineage_binding"
+  np__emit_io_edge "$_declare_lineage_handle" "$_declare_lineage_direction" "$_declare_lineage_dataset_id" \
+    "$_declare_lineage_binding" "$_declare_lineage_name"
   return 0
 }
 
@@ -2063,6 +2121,11 @@ np_trace_plan() {
 # control (view live logs, switch traffic). One affordance object
 # ('{"kind":"deploy-log",...}') or a bare array of them; the wire form is
 # always the array.
+#
+# A single object UPSERTS by its `kind`: re-declaring a kind replaces that
+# entry (a live meter re-emitted per heartbeat), while a NEW kind joins the
+# list — a later "deploy-log" never erases the "instances-health" meter.
+# An array is a FULL declaration and replaces the whole list.
 np_trace_affordances() {
   _affordances_handle=$(np__resolve_handle "${1:-}")
   if np__is_handle "${1:-}"; then
@@ -2071,11 +2134,21 @@ np_trace_affordances() {
   np__is_handle "$_affordances_handle" || return 0
   _affordances_body=${1:-}
   case "$_affordances_body" in
-    \[*) ;;
-    \{*) _affordances_body="[$_affordances_body]" ;;
+    \[*)
+      np__node_set "$_affordances_handle" affordances_slots ''
+      np__node_set "$_affordances_handle" affordances ''
+      np__stage_facet "$_affordances_handle" "$NP_FACET_AFFORDANCES" "$_affordances_body"
+      ;;
+    \{*)
+      _affordances_kind=$(printf '%s' "$_affordances_body" \
+        | sed -n 's/.*"kind"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      # No kind: the object itself is its identity (append-once semantics).
+      [ -n "$_affordances_kind" ] || _affordances_kind=$_affordances_body
+      np__upsert_descriptor "$_affordances_handle" "$NP_FACET_AFFORDANCES" affordances \
+        "$_affordances_body" "$_affordances_kind"
+      ;;
     *) np__drop 'affordances' 'body must be a JSON object or array'; return 0 ;;
   esac
-  np__stage_facet "$_affordances_handle" "$NP_FACET_AFFORDANCES" "$_affordances_body"
   np__flush_foreign "$_affordances_handle"
   return 0
 }
@@ -2083,8 +2156,12 @@ np_trace_affordances() {
 # np_trace_progress [handle] <current> <target> [unit]
 #
 # How far a CONVERGING phase has advanced toward its declared target —
-# instances 3 of 10, traffic 40 of 100. Non-negative integers; the optional
-# unit names what is counted ("percent", "instances").
+# instances 3 of 10, traffic 40 of 100. Non-negative integers. The unit is a
+# number-FORMAT hint from the wire's CLOSED vocabulary (percent, count, bytes,
+# milliseconds) — the API rejects the whole EVENT over an unknown unit, and an
+# enriched node re-emits its full facet bag, so one bad unit would poison every
+# later emission. A word outside the vocabulary is therefore dropped here (the
+# noun belongs in the step's title, not the unit).
 np_trace_progress() {
   _progress_handle=$(np__resolve_handle "${1:-}")
   if np__is_handle "${1:-}"; then
@@ -2100,6 +2177,13 @@ np_trace_progress() {
   fi
   case "$_progress_current$_progress_target" in
     *[!0-9]*) np__drop 'progress' 'current and target must be non-negative integers'; return 0 ;;
+  esac
+  case "$_progress_unit" in
+    '' | percent | count | bytes | milliseconds) ;;
+    *)
+      np__drop 'progress' "unit '$_progress_unit' is not in the wire vocabulary (percent, count, bytes, milliseconds); omitted"
+      _progress_unit=''
+      ;;
   esac
   np__stage_facet "$_progress_handle" "$NP_FACET_PROGRESS" \
     "$(np__json_obj_raw current "$_progress_current" target "$_progress_target" \

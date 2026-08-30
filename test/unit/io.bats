@@ -133,11 +133,24 @@ load '../helper'
 @test "progress records current/target as numbers, with the unit" {
   np_sh_state '
     run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_progress "$run" 3 10 count
+    np_trace_complete "$run"
+    wire
+  '
+  assert_out_match '*"tracing.progress":{"current":3,"target":10,"unit":"count"}*'
+}
+
+@test "progress drops a unit outside the wire vocabulary — the numbers still travel" {
+  # The API rejects the whole EVENT over an unknown unit, and an enriched node
+  # re-emits its full bag — one bad unit must never poison later emissions.
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
     np_trace_progress "$run" 3 10 instances
     np_trace_complete "$run"
     wire
   '
-  assert_out_match '*"tracing.progress":{"current":3,"target":10,"unit":"instances"}*'
+  assert_out_match '*"tracing.progress":{"current":3,"target":10}*'
+  ! [[ "$output" == *'"unit":"instances"'* ]]
 }
 
 @test "progress rejects non-integers as a drop" {
@@ -234,4 +247,44 @@ load '../helper'
   '
   assert_out_match '*"run_id":"upstream-run~wait@0.0"*'
   assert_out_match '*"tracing.output":\[{"kind":"inline","name":"instances","value":{"healthy":1}}\]*'
+}
+
+@test "a re-declared output name replaces its entry in place, latest telling first position" {
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_output "$run" instances "{\"healthy\":0,\"desired\":3}"
+    np_trace_produces "$run" "k8s-service:ns/svc" --name service --uri "ns/svc"
+    np_trace_output "$run" instances "{\"healthy\":3,\"desired\":3}"
+    np_trace_complete "$run"
+    wire
+  '
+  assert_out_match '*"tracing.output":\[{"kind":"inline","name":"instances","value":{"healthy":3,"desired":3}},{"kind":"pointer","name":"service","uri":"ns/svc"}\]*'
+  # The TERMINAL event carries exactly one entry per name (the edge's lazy
+  # started re-emit is history and may still show the earlier telling).
+  ! [[ "$(printf '%s\n' "$output" | grep '"status":"completed"')" == *'"healthy":0'* ]]
+}
+
+@test "affordance objects upsert by kind: a later kind never erases an earlier one" {
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_affordances "$run" "{\"kind\":\"instances-health\",\"healthy\":0,\"desired\":1}"
+    np_trace_affordances "$run" "{\"kind\":\"instances-health\",\"healthy\":1,\"desired\":1}"
+    np_trace_affordances "$run" "{\"kind\":\"deploy-log\",\"scope_id\":\"7\"}"
+    np_trace_complete "$run"
+    wire
+  '
+  assert_out_match '*"tracing.affordances":\[{"kind":"instances-health","healthy":1,"desired":1},{"kind":"deploy-log","scope_id":"7"}\]*'
+  ! [[ "$output" == *'"healthy":0'* ]]
+}
+
+@test "an affordance array is a full declaration and replaces the list" {
+  np_sh_state '
+    run=$(np_trace_run --trace-id tr1 --run-id tr1)
+    np_trace_affordances "$run" "{\"kind\":\"instances-health\",\"healthy\":1}"
+    np_trace_affordances "$run" "[{\"kind\":\"traffic-switch\",\"to\":100}]"
+    np_trace_complete "$run"
+    wire
+  '
+  assert_out_match '*"tracing.affordances":\[{"kind":"traffic-switch","to":100}\]*'
+  ! [[ "$output" == *'instances-health'* ]]
 }

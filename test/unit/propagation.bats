@@ -163,6 +163,36 @@ TRACE='0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
   ' >/dev/null
 }
 
+@test "a foreign re-emit on a derived path speaks its coordinate triple" {
+  # The API rejects a keyed (derived-path) run_id whose key/attempt/iteration
+  # are absent, so the adopted step's coordinates must ride every re-emit.
+  np_sh_state '
+    h=$(np_trace_adopt "1|t|r~wait-for-instances@2.3")
+    np_trace_output "$h" instances "{\"healthy\":1}"
+    wire
+  '
+  assert_ok
+  echo "$output" | jq -e '
+    select(.type == "node.run") | select(.data.run_id == "r~wait-for-instances@2.3")
+    | .data
+    | (.key == "wait-for-instances" and .attempt == 2 and .iteration == 3)
+  ' >/dev/null
+}
+
+@test "adopting a NAMED run id re-emits without a coordinate triple" {
+  np_sh_state '
+    h=$(np_trace_adopt "1|t|named-run")
+    np_trace_labels "$h" "wait.state=progressing"
+    wire
+  '
+  assert_ok
+  echo "$output" | jq -e '
+    select(.type == "node.run") | select(.data.run_id == "named-run")
+    | .data
+    | (has("key") | not)
+  ' >/dev/null
+}
+
 @test "each foreign setter is its own event — successive errors are all observable" {
   np_sh_state '
     h=$(np_trace_adopt "1|t|r~apply@0.0")
